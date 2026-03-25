@@ -78,7 +78,6 @@ public class XnatCGetScp extends BasicCGetSCP {
         final String queryLevel = keys.getString(Tag.QueryRetrieveLevel);
 
         log.debug("C-GET from {} to AE '{}', level={}", callingAet, calledAet, queryLevel);
-        // TODO: verify query level?
 
         final XnatProjectdata project = _projectAeResolver.resolve(calledAet)
             .orElseThrow(() -> {
@@ -102,7 +101,7 @@ public class XnatCGetScp extends BasicCGetSCP {
                     log.debug("Transcoding {} from {} to {}", inst.iuid, inst.tsuid, tsuid);
                     try (DicomInputStream din = new DicomInputStream(inst.getFile())) {
                         din.readFileMetaInformation();
-                        return new DataWriterAdapter(din.readDataset(-1, -1));
+                        return new DataWriterAdapter(din.readDataset(-1));
                     }
                 }
                 return super.createDataWriter(inst, tsuid);
@@ -271,5 +270,4 @@ public class XnatCGetScp extends BasicCGetSCP {
                 .orElse(Stream.empty())
                 .collect(Collectors.toSet());
     }
-
 }

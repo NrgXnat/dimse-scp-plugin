@@ -1,7 +1,6 @@
 package org.nrg.xnat.dimse.scp;
 
 import lombok.extern.slf4j.Slf4j;
-import org.apache.ecs.vxml.Transfer;
 import org.dcm4che3.data.UID;
 import org.dcm4che3.net.ApplicationEntity;
 import org.dcm4che3.net.Connection;
@@ -37,7 +36,6 @@ import java.util.stream.Stream;
 public class DimseScpService {
     private static final String DEVICE_NAME = "XNAT_DIMSE";
     private static final int    DEFAULT_PORT = 9104;
-
     private static final String[] TRANSFER_SYNTAXES = {
         UID.ImplicitVRLittleEndian,
         UID.ExplicitVRLittleEndian,
@@ -174,9 +172,8 @@ public class DimseScpService {
         UID.PrivateSiemensCSANonImageStorage,
     };
 
-    private final ProjectAeResolver _projectAeResolver;
-    private final DicomQueryService _queryService;
-
+    private final ProjectAeResolver  _projectAeResolver;
+    private final DicomQueryService  _queryService;
     private Device                   _device;
     private ExecutorService          _executor;
     private ScheduledExecutorService _scheduledExecutor;

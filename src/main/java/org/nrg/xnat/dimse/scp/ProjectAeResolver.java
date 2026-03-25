@@ -5,12 +5,9 @@ import org.nrg.xdat.om.XnatProjectdata;
 import org.nrg.xdat.security.user.XnatUserProvider;
 import org.nrg.xft.security.UserI;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 
 import javax.annotation.Nonnull;
-import javax.inject.Provider;
-import java.io.IOException;
 import java.util.Optional;
 
 /**
@@ -46,7 +43,6 @@ public class ProjectAeResolver {
     }
 
     /**
-     * Resolves a Called AE Title to an XNAT project.
      *
      * @param calledAeTitle the Called AE Title from the DICOM association
      * @return the matching project, or empty if no accessible project matches
