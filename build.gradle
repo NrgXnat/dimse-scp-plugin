@@ -1,0 +1,208 @@
+buildscript {
+    ext {
+        vXnat = "1.9.2"
+    }
+}
+
+plugins {
+    id "eclipse"
+    id "idea"
+    id "java-library"
+    id "maven-publish"
+    id "com.palantir.git-version" version "3.4.0"
+    id "io.freefair.lombok" version "8.14.3"
+    id "net.linguica.maven-settings" version "0.5"
+    id "org.nrg.xnat.build.xnat-data-builder" version "${vXnat}"
+    id "io.spring.dependency-management" version "1.1.7"
+}
+
+group = "org.nrg.xnatx.plugins"
+version = "0.1.0-SNAPSHOT"
+description = "XNAT DIMSE Plugin"
+
+repositories {
+    mavenLocal()
+    mavenCentral()
+    maven { url = "https://nrgxnat.jfrog.io/nrgxnat/libs-release" }
+    maven { url = "https://nrgxnat.jfrog.io/nrgxnat/libs-snapshot" }
+    maven { url = "https://maven.dcm4che.org" }
+    maven { url = "https://maven.imagej.net/content/groups/public" }
+    maven { url = "https://oss.sonatype.org/content/repositories/releases/" }
+    // For org.weasis.core:weasis-core-img:4.6.0.
+    maven { url = "https://raw.githubusercontent.com/nroduit/mvn-repo/master/" }
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_1_8
+    targetCompatibility = JavaVersion.VERSION_1_8
+    withSourcesJar()
+    withJavadocJar()
+}
+
+configurations {
+    all*.exclude group: 'edu.ucar', module: 'netcdf'
+    all*.exclude group: 'jakarta-regexp'
+    all*.exclude group: 'net.sf.saxon', module: 'Saxon-B'
+    all*.exclude group: 'org.apache.geronimo.specs'
+    all*.exclude group: 'javax.sql', module: 'jdbc-stdext'
+    all*.exclude group: 'javax.transaction', module: 'jta'
+    all*.exclude group: 'javax.servlet', module: 'servlet-api'
+
+    implementation.extendsFrom(implementAndInclude)
+    all {
+    	exclude group: 'com.sun.media', module: 'jai_imageio'
+    }
+}
+
+dependencyManagement.imports {
+    mavenBom "org.nrg:parent:${vXnat}"
+}
+
+idea {
+    module {
+        inheritOutputDirs = false
+        outputDir = compileJava.destinationDirectory.get().asFile
+        testOutputDir = compileTestJava.destinationDirectory.get().asFile
+    }
+}
+
+sourceSets {
+    main {
+        java {
+            srcDir "build/xnat-generated/src/main/java"
+        }
+        resources {
+            srcDir "build/xnat-generated/src/main/resources"
+        }
+    }
+}
+
+compileJava {
+    options.fork = false
+}
+
+/*
+configurations.testRuntimeClasspath {
+    exclude group: 'com.sun.media', module: 'jai_imageio'
+}
+*/
+
+dependencyManagement.imports {
+    mavenBom "org.nrg:parent:${vXnat}"
+}
+
+dependencies {
+    compileOnly "org.slf4j:slf4j-api"
+    compileOnly "log4j:log4j"
+    compileOnly "org.nrg.xnat:web"
+    compileOnly "org.nrg.xnat:xnat-data-models"
+    compileOnly "org.nrg.xdat:core"
+    compileOnly "org.nrg:framework"
+    compileOnly "org.nrg:config"
+    compileOnly "org.springframework:spring-beans"
+    compileOnly "org.springframework:spring-context"
+    compileOnly "org.springframework:spring-web"
+    compileOnly "org.springframework:spring-webmvc"
+    compileOnly "io.springfox:springfox-swagger2"
+    compileOnly "io.springfox:springfox-swagger-ui"
+
+    // DCM4CHE for DICOMweb support (packaged in plugin)
+    compileOnly "org.dcm4che:dcm4che-core"
+    compileOnly "org.dcm4che:dcm4che-net"
+
+    // Additional dependencies (packaged in plugin)
+    implementation 'commons-io:commons-io'
+
+    testImplementation 'junit:junit'
+    testImplementation "org.springframework:spring-test"
+    testImplementation "org.springframework:spring-web"
+    testImplementation "org.springframework:spring-webmvc"
+    testImplementation "org.mockito:mockito-core"
+    testImplementation "javax.servlet:javax.servlet-api"
+    testImplementation "org.slf4j:slf4j-simple"
+    testImplementation "org.nrg:framework"
+    testImplementation "org.nrg.xdat:core"
+    testImplementation "org.nrg.xnat:xnat-data-models"
+    testImplementation "org.nrg.xnat:web"
+}
+
+// Pulls in the Jenkins BUILD_NUMBER environment variable if available.
+def buildDate = new Date()
+def buildNumber = System.getenv().BUILD_NUMBER?.toInteger() ?: "Manual"
+def isDirty, branchName, gitHash, gitHashFull, commitDistance, lastTag, isCleanTag
+
+try {
+    def gitDetails = versionDetails()
+    isDirty = gitVersion().endsWith ".dirty"
+    branchName = gitDetails.branchName ?: "Unknown"
+    gitHash = gitDetails.gitHash
+    gitHashFull = gitDetails.gitHashFull
+    commitDistance = gitDetails.commitDistance
+    lastTag = gitDetails.lastTag
+    isCleanTag = gitDetails.isCleanTag
+} catch (IllegalArgumentException ignored) {
+    logger.info "Got an error trying to read VCS metadata from git. It's possible this project is not under VCS control. Using placeholder values for manifest entries."
+    isDirty = true
+    branchName = "Unknown"
+    gitHash = "None"
+    gitHashFull = "None"
+    commitDistance = 0
+    lastTag = "None"
+    isCleanTag = false
+}
+
+compileJava {
+    dependsOn xnatDataBuilder
+    options.fork = false
+}
+
+jar {
+    doLast {
+        if (!gradle.taskGraph.hasTask(":xnatPluginJar")) {
+            logger.warn "WARNING: You should generally run xnatPluginJar instead of jar task for this plugin"
+        }
+    }
+}
+
+tasks.register("xnatPluginJar", Jar) {
+    zip64 = true
+    archiveClassifier = "xpl"
+    from {
+        configurations.implementAndInclude.collect { it.isDirectory() ? it : zipTree(it) }
+    } {
+        exclude "META-INF/*.SF"
+        exclude "META-INF/*.DSA"
+        exclude "META-INF/*.RSA"
+    }
+    with jar
+}
+
+tasks.withType(Jar).configureEach {
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    manifest {
+        attributes "Application-Name": project.description,
+                "Build-Date": buildDate,
+                "Build-Number": buildNumber,
+                "Implementation-Title": project.description,
+                "Implementation-Version": project.version,
+                "Implementation-Sha": gitHash,
+                "Implementation-Sha-Full": gitHashFull,
+                "Implementation-Commit": commitDistance,
+                "Implementation-LastTag": lastTag,
+                "Implementation-Branch": branchName,
+                "Implementation-CleanTag": isCleanTag,
+                "Implementation-Dirty": isDirty
+    }
+}
+
+publishing {
+    publications {
+        mavenJava(MavenPublication) {
+            from components.java
+        }
+    }
+
+    repositories {
+    }
+}
+
