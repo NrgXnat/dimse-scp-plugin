@@ -1,0 +1,220 @@
+package org.nrg.xnat.dimse.query;
+
+import org.dcm4che3.data.Attributes;
+import org.dcm4che3.data.Tag;
+import org.dcm4che3.data.VR;
+import org.junit.Test;
+
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
+
+/**
+ * Tests for {@link DicomMatchUtils}.
+ */
+public class DicomMatchUtilsTest {
+
+    // --- Universal match ---
+
+    @Test
+    public void emptyQueryKeyMatchesAnything() {
+        assertTrue(DicomMatchUtils.matchesValue(Tag.PatientName, VR.PN, "", "Smith"));
+        assertTrue(DicomMatchUtils.matchesValue(Tag.PatientName, VR.PN, null, "Smith"));
+    }
+
+    // --- Single value exact match ---
+
+    @Test
+    public void exactMatchSucceeds() {
+        assertTrue(DicomMatchUtils.matchesValue(
+                Tag.AccessionNumber, VR.SH, "ACC001", "ACC001"));
+    }
+
+    @Test
+    public void exactMatchFailsOnMismatch() {
+        assertFalse(DicomMatchUtils.matchesValue(
+                Tag.AccessionNumber, VR.SH, "ACC001", "ACC002"));
+    }
+
+    @Test
+    public void exactMatchFailsOnNull() {
+        assertFalse(DicomMatchUtils.matchesValue(
+                Tag.AccessionNumber, VR.SH, "ACC001", null));
+    }
+
+    @Test
+    public void patientNameMatchIsCaseInsensitive() {
+        assertTrue(DicomMatchUtils.matchesValue(
+                Tag.PatientName, VR.PN, "SMITH", "smith"));
+        assertTrue(DicomMatchUtils.matchesValue(
+                Tag.PatientName, VR.PN, "Smith", "SMITH"));
+    }
+
+    // --- Wildcard matching ---
+
+    @Test
+    public void wildcardStarMatchesAny() {
+        assertTrue(DicomMatchUtils.matchesValue(
+                Tag.PatientName, VR.PN, "SM*", "SMITH"));
+        assertTrue(DicomMatchUtils.matchesValue(
+                Tag.PatientName, VR.PN, "*ITH", "SMITH"));
+        assertTrue(DicomMatchUtils.matchesValue(
+                Tag.PatientName, VR.PN, "*MIT*", "SMITH"));
+    }
+
+    @Test
+    public void wildcardStarAloneMatchesAll() {
+        assertTrue(DicomMatchUtils.matchesValue(
+                Tag.PatientName, VR.PN, "*", "anything"));
+    }
+
+    @Test
+    public void wildcardQuestionMatchesSingleChar() {
+        assertTrue(DicomMatchUtils.matchesValue(
+                Tag.PatientName, VR.PN, "SMI?H", "SMITH"));
+        assertFalse(DicomMatchUtils.matchesValue(
+                Tag.PatientName, VR.PN, "SMI?", "SMITH"));
+    }
+
+    @Test
+    public void wildcardIsCaseInsensitiveForPN() {
+        assertTrue(DicomMatchUtils.matchesValue(
+                Tag.PatientName, VR.PN, "sm*", "SMITH"));
+    }
+
+    @Test
+    public void wildcardNoMatchReturns_false() {
+        assertFalse(DicomMatchUtils.matchesValue(
+                Tag.PatientName, VR.PN, "JO*", "SMITH"));
+    }
+
+    // --- Date range matching ---
+
+    @Test
+    public void dateRangeBothBounds() {
+        assertTrue(DicomMatchUtils.matchesValue(
+                Tag.StudyDate, VR.DA, "20200101-20201231", "20200615"));
+        assertFalse(DicomMatchUtils.matchesValue(
+                Tag.StudyDate, VR.DA, "20200101-20201231", "20210101"));
+    }
+
+    @Test
+    public void dateRangeIncludesBounds() {
+        assertTrue(DicomMatchUtils.matchesValue(
+                Tag.StudyDate, VR.DA, "20200101-20201231", "20200101"));
+        assertTrue(DicomMatchUtils.matchesValue(
+                Tag.StudyDate, VR.DA, "20200101-20201231", "20201231"));
+    }
+
+    @Test
+    public void dateRangeOpenStart() {
+        assertTrue(DicomMatchUtils.matchesValue(
+                Tag.StudyDate, VR.DA, "-20201231", "20190101"));
+        assertFalse(DicomMatchUtils.matchesValue(
+                Tag.StudyDate, VR.DA, "-20201231", "20210101"));
+    }
+
+    @Test
+    public void dateRangeOpenEnd() {
+        assertTrue(DicomMatchUtils.matchesValue(
+                Tag.StudyDate, VR.DA, "20200101-", "20250101"));
+        assertFalse(DicomMatchUtils.matchesValue(
+                Tag.StudyDate, VR.DA, "20200101-", "20190101"));
+    }
+
+    // --- UID list matching ---
+
+    @Test
+    public void singleUidMatch() {
+        assertTrue(DicomMatchUtils.matchesValue(
+                Tag.StudyInstanceUID, VR.UI, "1.2.3", "1.2.3"));
+        assertFalse(DicomMatchUtils.matchesValue(
+                Tag.StudyInstanceUID, VR.UI, "1.2.3", "4.5.6"));
+    }
+
+    @Test
+    public void uidListMatch() {
+        assertTrue(DicomMatchUtils.matchesValue(
+                Tag.StudyInstanceUID, VR.UI, "1.2.3\\4.5.6\\7.8.9", "4.5.6"));
+        assertFalse(DicomMatchUtils.matchesValue(
+                Tag.StudyInstanceUID, VR.UI, "1.2.3\\4.5.6\\7.8.9", "0.0.0"));
+    }
+
+    // --- Full Attributes matching ---
+
+    @Test
+    public void matchesAllKeys() {
+        final Attributes query = new Attributes();
+        query.setString(Tag.QueryRetrieveLevel, VR.CS, "STUDY");
+        query.setString(Tag.PatientName, VR.PN, "SM*");
+        query.setString(Tag.StudyDate, VR.DA, ""); // universal
+
+        final Attributes candidate = new Attributes();
+        candidate.setString(Tag.PatientName, VR.PN, "SMITH");
+        candidate.setString(Tag.StudyDate, VR.DA, "20200615");
+
+        assertTrue(DicomMatchUtils.matchesQuery(query).test(candidate));
+    }
+
+    @Test
+    public void matchesRejectsOnAnyKeyMismatch() {
+        final Attributes query = new Attributes();
+        query.setString(Tag.QueryRetrieveLevel, VR.CS, "STUDY");
+        query.setString(Tag.PatientName, VR.PN, "JONES");
+        query.setString(Tag.StudyDate, VR.DA, "20200615");
+
+        final Attributes candidate = new Attributes();
+        candidate.setString(Tag.PatientName, VR.PN, "SMITH");
+        candidate.setString(Tag.StudyDate, VR.DA, "20200615");
+
+        assertFalse(DicomMatchUtils.matchesQuery(query).test(candidate));
+    }
+
+    // --- SQL LIKE translation ---
+
+    @Test
+    public void toSqlLikeTranslatesDicomWildcards() {
+        assertEquals("%", DicomMatchUtils.toSqlLike("*"));
+        assertEquals("SM%", DicomMatchUtils.toSqlLike("SM*"));
+        assertEquals("_", DicomMatchUtils.toSqlLike("?"));
+        assertEquals("SM_TH", DicomMatchUtils.toSqlLike("SM?TH"));
+    }
+
+    @Test
+    public void toSqlLikeEscapesSqlWildcards() {
+        assertEquals("100\\%", DicomMatchUtils.toSqlLike("100%"));
+        assertEquals("a\\_b", DicomMatchUtils.toSqlLike("a_b"));
+    }
+
+    // --- DICOM date to ISO conversion ---
+
+    @Test
+    public void dicomDateToIsoFormat() {
+        assertEquals("2020-01-15", DicomMatchUtils.dicomDateToIso("20200115"));
+    }
+
+    @Test
+    public void dicomDateToIsoPassesThroughInvalid() {
+        assertEquals("invalid", DicomMatchUtils.dicomDateToIso("invalid"));
+        assertEquals(null, DicomMatchUtils.dicomDateToIso(null));
+    }
+
+    // --- Wildcard detection ---
+
+    @Test
+    public void containsWildcardDetectsStarAndQuestion() {
+        assertTrue(DicomMatchUtils.containsWildcard("SM*"));
+        assertTrue(DicomMatchUtils.containsWildcard("SM?TH"));
+        assertFalse(DicomMatchUtils.containsWildcard("SMITH"));
+    }
+
+    // --- Date range detection ---
+
+    @Test
+    public void isDateRangeDetectsHyphen() {
+        assertTrue(DicomMatchUtils.isDateRange("20200101-20201231"));
+        assertTrue(DicomMatchUtils.isDateRange("-20201231"));
+        assertTrue(DicomMatchUtils.isDateRange("20200101-"));
+        assertFalse(DicomMatchUtils.isDateRange("20200101"));
+    }
+}

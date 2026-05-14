@@ -106,12 +106,8 @@ dependencies {
     compileOnly "io.springfox:springfox-swagger2"
     compileOnly "io.springfox:springfox-swagger-ui"
 
-    // DCM4CHE for DICOMweb support (packaged in plugin)
     compileOnly "org.dcm4che:dcm4che-core"
-    compileOnly "org.dcm4che:dcm4che-net"
-
-    // Additional dependencies (packaged in plugin)
-    implementation 'commons-io:commons-io'
+    implementAndInclude "org.dcm4che:dcm4che-net"
 
     testImplementation 'junit:junit'
     testImplementation "org.springframework:spring-test"
@@ -124,6 +120,8 @@ dependencies {
     testImplementation "org.nrg.xdat:core"
     testImplementation "org.nrg.xnat:xnat-data-models"
     testImplementation "org.nrg.xnat:web"
+    testImplementation "org.dcm4che:dcm4che-core"
+    testImplementation "org.dcm4che:dcm4che-net"
 }
 
 // Pulls in the Jenkins BUILD_NUMBER environment variable if available.

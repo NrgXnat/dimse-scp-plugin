@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+  <appender name="dimse" class="ch.qos.logback.core.rolling.RollingFileAppender">
+    <file>${xnat.home}/logs/dimse.log</file>
+    <append>false</append>
+    <encoder>
+      <pattern>%d [%t] %-5p %c - %m%n</pattern>
+    </encoder>
+    <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+      <fileNamePattern>${xnat.home}/logs/dimse.log.%d{yyyy-MM-dd}</fileNamePattern>
+    </rollingPolicy>
+  </appender>
+  <logger additivity="false" name="org.nrg.xnat.dimse" level="INFO">
+    <appender-ref ref="dimse"/>
+  </logger>
+</configuration>
