@@ -1,0 +1,90 @@
+####
+#### DIMSE SCP Site Settings
+####
+
+dimseConfigPanel:
+    kind: panel.form
+    name: dimseConfigPanel
+    id: dimse-config-form
+    label: "DIMSE SCP Configuration"
+    method: POST
+    contentType: json
+    action: "/xapi/dicom-qr-scp/prefs"
+    load: "/xapi/dicom-qr-scp/prefs"
+    contents:
+        description:
+            tag: div.message
+            contents: >
+                Configure the DIMSE Application Entity that provides C-FIND
+                and C-GET services to external DICOM clients. The Called AE Title
+                on an incoming association selects the XNAT project to query.
+
+        sitewideHeader:
+            tag: h3
+            contents: "Sitewide Settings"
+
+        enabled:
+            kind: panel.input.switchbox
+            name: enabled
+            label: "Enable C-FIND/C-GET SCP"
+            onText: Enabled
+            offText: Disabled
+            description: >
+                When disabled, the SCP stops listening and no DICOM
+                associations are accepted. Changing this takes effect
+                immediately.
+
+        port:
+            kind: panel.input.text
+            name: port
+            label: "TCP Port"
+            validation: "onblur integer greaterThan:0"
+            element:
+                title: TCP port the SCP listens on
+            description: >
+                Port for incoming DICOM associations. Default: 9104.
+                Changes take effect the next time the SCP is restarted
+                (toggle the switch above off and on).
+
+        projectDefaultsHeader:
+            tag: h3
+            contents: "Project Defaults"
+
+        enabledByDefault:
+            kind: panel.input.switchbox
+            name: enabledByDefault
+            label: "Enable for projects by default"
+            onText: Enabled
+            offText: Disabled
+            description: >
+                When enabled, all projects are accessible via C-FIND and
+                C-GET unless individually disabled. When disabled, projects
+                must be individually enabled before their data can be
+                queried or retrieved.
+
+####
+#### Tab Definition
+####
+
+dimseConfigTab:
+    kind: tab
+    name: dimseConfigTab
+    label: C-FIND/C-GET Settings
+    group: dimseTabGroup
+    contents:
+        ${dimseConfigPanel}
+
+####
+#### Root Site Admin Spawner Config Object
+####
+
+siteSettings:
+    kind: tabs
+    name: dimseAdmin
+    label: DIMSE SCP
+    meta:
+        tabGroups:
+            dimseTabGroup: DICOM C-FIND/C-GET
+    contains: tabs
+    tabs:
+        ${dimseConfigTab}

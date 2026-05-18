@@ -19,8 +19,14 @@ an incoming association selects the XNAT project to query: if the
 AE title matches a project ID or alias, that project's data is
 searched.
 
+## Configuration
+
+The SCP can be enabled or disabled sitewide via **Administer >
+Plugin Settings > DIMSE SCP**. Individual projects can override
+the sitewide default in **Project Settings > DICOM Q/R**.
+
 See [CONFORMANCE.md](CONFORMANCE.md) for detailed DICOM
-conformance information.
+conformance information, including the full REST API reference.
 
 ## Building
 

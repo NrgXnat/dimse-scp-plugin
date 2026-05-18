@@ -4,6 +4,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.nrg.xdat.om.XnatProjectdata;
 import org.nrg.xdat.security.user.XnatUserProvider;
 import org.nrg.xft.security.UserI;
+import org.nrg.xnat.dimse.config.DimsePreferences;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
@@ -25,15 +26,19 @@ import java.util.Optional;
 @Service
 public class ProjectAeResolver {
     private final XnatUserProvider _userProvider;
+    private final DimsePreferences _preferences;
 
     /**
      * Creates a new ProjectAeResolver.
      *
      * @param userProvider provides the service account user for data access
+     * @param preferences  DIMSE preference bean
      */
     @Autowired
-    public ProjectAeResolver(final XnatUserProvider userProvider) {
+    public ProjectAeResolver(final XnatUserProvider userProvider,
+                              final DimsePreferences preferences) {
         _userProvider = userProvider;
+        _preferences = preferences;
     }
 
     /**
@@ -66,7 +71,21 @@ public class ProjectAeResolver {
             log.debug("No project found for AE title '{}'", calledAeTitle);
             return Optional.empty();
         }
+        if (!isProjectEnabled(project)) {
+            log.debug("DIMSE access disabled for project '{}'", project.getId());
+            return Optional.empty();
+        }
         log.debug("Resolved AE title '{}' to project '{}'", calledAeTitle, project.getId());
         return Optional.of(project);
+    }
+
+    /**
+     * Returns whether DIMSE access is enabled for the given project.
+     *
+     * @param project the project to check
+     * @return true if the project is accessible via DIMSE
+     */
+    private boolean isProjectEnabled(final XnatProjectdata project) {
+        return _preferences.isProjectEnabled(project.getId());
     }
 }

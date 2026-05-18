@@ -1,6 +1,8 @@
 package org.nrg.xnat.dimse;
 
+import lombok.extern.slf4j.Slf4j;
 import org.nrg.framework.annotations.XnatPlugin;
+import org.nrg.xnat.dimse.config.DimsePreferences;
 import org.nrg.xnat.dimse.scp.DimseScpService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.ComponentScan;
@@ -20,6 +22,7 @@ import static java.nio.charset.StandardCharsets.UTF_8;
 /**
  * XNAT plugin providing DICOM DIMSE SCP services (C-FIND, C-GET).
  */
+@Slf4j
 @XnatPlugin(
     value = "dimse",
     name = "DIMSE Plugin",
@@ -28,10 +31,23 @@ import static java.nio.charset.StandardCharsets.UTF_8;
 )
 @ComponentScan({"org.nrg.xnat.dimse"})
 public class DimsePlugin {
+    /**
+     * Starts the DIMSE SCP on plugin initialization, if enabled.
+     *
+     * @param scpService  SCP lifecycle service
+     * @param preferences DIMSE preference bean
+     * @throws GeneralSecurityException if TLS setup fails
+     * @throws IOException              if the port cannot be bound
+     */
     @Autowired
-    public DimsePlugin(final DimseScpService scpService) throws GeneralSecurityException, IOException {
-        // TODO: port from prefs?
-        scpService.start();
+    public DimsePlugin(final DimseScpService scpService,
+                       final DimsePreferences preferences)
+            throws GeneralSecurityException, IOException {
+        if (preferences.isEnabled()) {
+            scpService.start(preferences.getPort());
+        } else {
+            log.info("DIMSE SCP is disabled; not starting");
+        }
     }
 
     public final static ResourceLoader RESOURCE_LOADER = new DefaultResourceLoader();

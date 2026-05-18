@@ -1,0 +1,61 @@
+####
+#### DIMSE SCP Project Settings
+####
+
+dimseProjectPanel:
+    kind: panel.form
+    name: dimseProjectPanel
+    id: dimse-project-form
+    label: "DICOM C-FIND/C-GET"
+    method: POST
+    contentType: json
+    action: "/xapi/dicom-qr-scp/{{XNAT.data.context.project}}"
+    load: "/xapi/dicom-qr-scp/{{XNAT.data.context.project}}"
+    contents:
+        description:
+            tag: div.message
+            contents: >
+                Control whether this project's data can be queried and
+                retrieved by external DICOM clients via C-FIND and C-GET.
+
+        enabled:
+            kind: panel.select.single
+            name: enabled
+            label: "C-FIND/C-GET Access"
+            options:
+                default: "Site Default"
+                "true": "Enabled"
+                "false": "Disabled"
+            description: >
+                Controls whether external DICOM clients can query and
+                retrieve this project's imaging data. "Site Default"
+                follows the sitewide setting configured by the
+                administrator.
+
+####
+#### Tab Definition
+####
+
+dimseProjectTab:
+    kind: tab
+    name: dimseProjectTab
+    label: DICOM Q/R
+    group: dimseProjectTabGroup
+    active: true
+    contents:
+        ${dimseProjectPanel}
+
+####
+#### Root Project Settings Spawner Config Object
+####
+
+projectSettings:
+    kind: tabs
+    name: dimseProjectSettings
+    label: DICOM C-FIND/C-GET
+    meta:
+        tabGroups:
+            dimseProjectTabGroup: DICOM Query/Retrieve
+    contains: tabs
+    tabs:
+        ${dimseProjectTab}
