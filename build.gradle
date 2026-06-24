@@ -1,6 +1,6 @@
 buildscript {
     ext {
-        vXnat = "1.9.2"
+        vXnat = "1.10.1-SNAPSHOT"
     }
 }
 
@@ -33,24 +33,23 @@ repositories {
 }
 
 java {
-    sourceCompatibility = JavaVersion.VERSION_1_8
-    targetCompatibility = JavaVersion.VERSION_1_8
+    sourceCompatibility = JavaVersion.VERSION_21
+    targetCompatibility = JavaVersion.VERSION_21
     withSourcesJar()
     withJavadocJar()
 }
 
 configurations {
-    all*.exclude group: 'edu.ucar', module: 'netcdf'
-    all*.exclude group: 'jakarta-regexp'
-    all*.exclude group: 'net.sf.saxon', module: 'Saxon-B'
-    all*.exclude group: 'org.apache.geronimo.specs'
-    all*.exclude group: 'javax.sql', module: 'jdbc-stdext'
-    all*.exclude group: 'javax.transaction', module: 'jta'
-    all*.exclude group: 'javax.servlet', module: 'servlet-api'
-
     implementation.extendsFrom(implementAndInclude)
-    all {
-    	exclude group: 'com.sun.media', module: 'jai_imageio'
+    configureEach {
+        exclude group: 'edu.ucar', module: 'netcdf'
+        exclude group: 'jakarta-regexp'
+        exclude group: 'net.sf.saxon', module: 'Saxon-B'
+        exclude group: 'org.apache.geronimo.specs'
+        exclude group: 'javax.sql', module: 'jdbc-stdext'
+        exclude group: 'javax.transaction', module: 'jta'
+        exclude group: 'javax.servlet', module: 'servlet-api'
+        exclude group: 'com.sun.media', module: 'jai_imageio'
     }
 }
 
@@ -93,9 +92,11 @@ dependencyManagement.imports {
 
 dependencies {
     compileOnly "org.slf4j:slf4j-api"
-    compileOnly "log4j:log4j"
+    compileOnly "log4j:log4j:1.2.17"
+    compileOnly "ecs:ecs"
+    compileOnly "commons-lang:commons-lang:2.6"
     compileOnly "org.nrg.xnat:web"
-    compileOnly "org.nrg.xnat:xnat-data-models"
+    // xnat-data-models merged into xnat-web in monorepo 1.10
     compileOnly "org.nrg.xdat:core"
     compileOnly "org.nrg:framework"
     compileOnly "org.nrg:config"
@@ -118,7 +119,6 @@ dependencies {
     testImplementation "org.slf4j:slf4j-simple"
     testImplementation "org.nrg:framework"
     testImplementation "org.nrg.xdat:core"
-    testImplementation "org.nrg.xnat:xnat-data-models"
     testImplementation "org.nrg.xnat:web"
     testImplementation "org.dcm4che:dcm4che-core"
     testImplementation "org.dcm4che:dcm4che-net"
@@ -164,7 +164,7 @@ jar {
 
 tasks.register("xnatPluginJar", Jar) {
     zip64 = true
-    archiveClassifier = "xpl"
+    archiveClassifier.set("xpl")
     from {
         configurations.implementAndInclude.collect { it.isDirectory() ? it : zipTree(it) }
     } {
