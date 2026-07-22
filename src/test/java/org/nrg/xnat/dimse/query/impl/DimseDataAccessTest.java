@@ -1,0 +1,292 @@
+package org.nrg.xnat.dimse.query.impl;
+
+import org.dcm4che3.data.Attributes;
+import org.dcm4che3.data.Tag;
+import org.dcm4che3.data.VR;
+import org.junit.Test;
+import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
+
+import java.util.Arrays;
+import java.util.List;
+import java.util.Optional;
+
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
+
+/**
+ * Tests for {@link DimseDataAccess} helper methods and SQL filter construction.
+ */
+public class DimseDataAccessTest {
+
+    // --- genderToDicomSex ---
+
+    @Test
+    public void maleGenderReturnsM() {
+        assertEquals(Optional.of("M"), DimseDataAccess.genderToDicomSex("male"));
+        assertEquals(Optional.of("M"), DimseDataAccess.genderToDicomSex("m"));
+        assertEquals(Optional.of("M"), DimseDataAccess.genderToDicomSex("Male"));
+        assertEquals(Optional.of("M"), DimseDataAccess.genderToDicomSex("M"));
+    }
+
+    @Test
+    public void femaleGenderReturnsF() {
+        assertEquals(Optional.of("F"), DimseDataAccess.genderToDicomSex("female"));
+        assertEquals(Optional.of("F"), DimseDataAccess.genderToDicomSex("f"));
+        assertEquals(Optional.of("F"), DimseDataAccess.genderToDicomSex("Female"));
+        assertEquals(Optional.of("F"), DimseDataAccess.genderToDicomSex("F"));
+    }
+
+    @Test
+    public void otherGenderReturnsO() {
+        assertEquals(Optional.of("O"), DimseDataAccess.genderToDicomSex("other"));
+        assertEquals(Optional.of("O"), DimseDataAccess.genderToDicomSex("unknown"));
+    }
+
+    @Test
+    public void nullBlankGenderReturnsEmpty() {
+        assertFalse(DimseDataAccess.genderToDicomSex(null).isPresent());
+        assertFalse(DimseDataAccess.genderToDicomSex("").isPresent());
+        assertFalse(DimseDataAccess.genderToDicomSex("  ").isPresent());
+    }
+
+    // --- dicomModality ---
+
+    @Test
+    public void petConvertsToPt() {
+        assertEquals("PT", DimseDataAccess.dicomModality("PET"));
+    }
+
+    @Test
+    public void normalModalityPassesThrough() {
+        assertEquals("CT", DimseDataAccess.dicomModality("CT"));
+        assertEquals("MR", DimseDataAccess.dicomModality("MR"));
+    }
+
+    @Test
+    public void longModalityTruncated() {
+        assertEquals("1234567890123456",
+                DimseDataAccess.dicomModality("12345678901234567"));
+    }
+
+    @Test
+    public void nullEmptyModalityReturnsNull() {
+        assertNull(DimseDataAccess.dicomModality(null));
+        assertNull(DimseDataAccess.dicomModality(""));
+    }
+
+    // --- copyReturnKeys ---
+
+    @Test
+    public void missingKeysAddedAsNull() {
+        final Attributes keys = new Attributes();
+        keys.setString(Tag.PatientName, VR.PN, "");
+        keys.setString(Tag.StudyDate, VR.DA, "");
+        keys.setString(Tag.StudyDescription, VR.LO, "");
+
+        final Attributes attrs = new Attributes();
+        attrs.setString(Tag.PatientName, VR.PN, "SMITH");
+        attrs.setString(Tag.StudyDate, VR.DA, "20200101");
+
+        DimseDataAccess.copyReturnKeys(keys, attrs);
+
+        assertEquals("SMITH", attrs.getString(Tag.PatientName));
+        assertEquals("20200101", attrs.getString(Tag.StudyDate));
+        assertTrue(attrs.contains(Tag.StudyDescription));
+    }
+
+    @Test
+    public void existingKeysNotOverwritten() {
+        final Attributes keys = new Attributes();
+        keys.setString(Tag.PatientName, VR.PN, "JONES");
+
+        final Attributes attrs = new Attributes();
+        attrs.setString(Tag.PatientName, VR.PN, "SMITH");
+
+        DimseDataAccess.copyReturnKeys(keys, attrs);
+
+        assertEquals("SMITH", attrs.getString(Tag.PatientName));
+    }
+
+    // --- addUidFilter ---
+
+    @Test
+    public void uidFilterEmptyValueNoOp() {
+        final StringBuilder sql = new StringBuilder("SELECT 1");
+        final MapSqlParameterSource params = new MapSqlParameterSource();
+        final Attributes keys = new Attributes();
+        keys.setString(Tag.StudyInstanceUID, VR.UI, "");
+
+        newAccess().addUidFilter(sql, params, keys, Tag.StudyInstanceUID, "i.uid");
+
+        assertEquals("SELECT 1", sql.toString());
+        assertFalse(params.hasValue("uid"));
+    }
+
+    @Test
+    public void uidFilterSingleUidExactMatch() {
+        final StringBuilder sql = new StringBuilder("SELECT 1");
+        final MapSqlParameterSource params = new MapSqlParameterSource();
+        final Attributes keys = new Attributes();
+        keys.setString(Tag.StudyInstanceUID, VR.UI, "1.2.3.4");
+
+        newAccess().addUidFilter(sql, params, keys, Tag.StudyInstanceUID, "i.uid");
+
+        assertTrue(sql.toString().contains("AND i.uid = :uid"));
+        assertEquals("1.2.3.4", params.getValue("uid"));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void uidFilterMultipleUidsInClause() {
+        final StringBuilder sql = new StringBuilder("SELECT 1");
+        final MapSqlParameterSource params = new MapSqlParameterSource();
+        final Attributes keys = new Attributes();
+        keys.setString(Tag.StudyInstanceUID, VR.UI, "1.2.3", "4.5.6", "7.8.9");
+
+        newAccess().addUidFilter(sql, params, keys, Tag.StudyInstanceUID, "i.uid");
+
+        assertTrue(sql.toString().contains("AND i.uid IN (:uidList)"));
+        final List<String> uidList = (List<String>) params.getValue("uidList");
+        assertEquals(Arrays.asList("1.2.3", "4.5.6", "7.8.9"), uidList);
+    }
+
+    // --- addStringFilter ---
+
+    @Test
+    public void stringFilterEmptyValueNoOp() {
+        final StringBuilder sql = new StringBuilder("SELECT 1");
+        final MapSqlParameterSource params = new MapSqlParameterSource();
+        final Attributes keys = new Attributes();
+        keys.setString(Tag.PatientName, VR.PN, "");
+
+        newAccess().addStringFilter(sql, params, keys,
+                Tag.PatientName, "e.label", "name");
+
+        assertEquals("SELECT 1", sql.toString());
+    }
+
+    @Test
+    public void stringFilterExactMatch() {
+        final StringBuilder sql = new StringBuilder("SELECT 1");
+        final MapSqlParameterSource params = new MapSqlParameterSource();
+        final Attributes keys = new Attributes();
+        keys.setString(Tag.PatientName, VR.PN, "SMITH");
+
+        newAccess().addStringFilter(sql, params, keys,
+                Tag.PatientName, "e.label", "name");
+
+        assertTrue(sql.toString().contains("AND e.label = :name"));
+        assertEquals("SMITH", params.getValue("name"));
+    }
+
+    @Test
+    public void stringFilterWildcardUsesLike() {
+        final StringBuilder sql = new StringBuilder("SELECT 1");
+        final MapSqlParameterSource params = new MapSqlParameterSource();
+        final Attributes keys = new Attributes();
+        keys.setString(Tag.PatientName, VR.PN, "SM*");
+
+        newAccess().addStringFilter(sql, params, keys,
+                Tag.PatientName, "e.label", "name");
+
+        assertTrue(sql.toString().contains("AND e.label LIKE :name"));
+        assertEquals("SM%", params.getValue("name"));
+    }
+
+    @Test
+    public void stringFilterQuestionMarkWildcard() {
+        final StringBuilder sql = new StringBuilder("SELECT 1");
+        final MapSqlParameterSource params = new MapSqlParameterSource();
+        final Attributes keys = new Attributes();
+        keys.setString(Tag.PatientName, VR.PN, "SM?TH");
+
+        newAccess().addStringFilter(sql, params, keys,
+                Tag.PatientName, "e.label", "name");
+
+        assertTrue(sql.toString().contains("LIKE :name"));
+        assertEquals("SM_TH", params.getValue("name"));
+    }
+
+    // --- addDateFilter ---
+
+    @Test
+    public void dateFilterEmptyValueNoOp() {
+        final StringBuilder sql = new StringBuilder("SELECT 1");
+        final MapSqlParameterSource params = new MapSqlParameterSource();
+        final Attributes keys = new Attributes();
+        keys.setString(Tag.StudyDate, VR.DA, "");
+
+        newAccess().addDateFilter(sql, params, keys, Tag.StudyDate, "e.date");
+
+        assertEquals("SELECT 1", sql.toString());
+    }
+
+    @Test
+    public void dateFilterExactDate() {
+        final StringBuilder sql = new StringBuilder("SELECT 1");
+        final MapSqlParameterSource params = new MapSqlParameterSource();
+        final Attributes keys = new Attributes();
+        keys.setString(Tag.StudyDate, VR.DA, "20200615");
+
+        newAccess().addDateFilter(sql, params, keys, Tag.StudyDate, "e.date");
+
+        assertTrue(sql.toString().contains("AND e.date = :dateExact"));
+        assertEquals("2020-06-15", params.getValue("dateExact"));
+    }
+
+    @Test
+    public void dateFilterBoundedRange() {
+        final StringBuilder sql = new StringBuilder("SELECT 1");
+        final MapSqlParameterSource params = new MapSqlParameterSource();
+        final Attributes keys = new Attributes();
+        keys.setString(Tag.StudyDate, VR.DA, "20200101-20201231");
+
+        newAccess().addDateFilter(sql, params, keys, Tag.StudyDate, "e.date");
+
+        final String result = sql.toString();
+        assertTrue(result.contains("AND e.date >= :dateStart"));
+        assertTrue(result.contains("AND e.date <= :dateEnd"));
+        assertEquals("2020-01-01", params.getValue("dateStart"));
+        assertEquals("2020-12-31", params.getValue("dateEnd"));
+    }
+
+    @Test
+    public void dateFilterOpenStartRange() {
+        final StringBuilder sql = new StringBuilder("SELECT 1");
+        final MapSqlParameterSource params = new MapSqlParameterSource();
+        final Attributes keys = new Attributes();
+        keys.setString(Tag.StudyDate, VR.DA, "-20201231");
+
+        newAccess().addDateFilter(sql, params, keys, Tag.StudyDate, "e.date");
+
+        final String result = sql.toString();
+        assertFalse(result.contains("dateStart"));
+        assertTrue(result.contains("AND e.date <= :dateEnd"));
+        assertEquals("2020-12-31", params.getValue("dateEnd"));
+    }
+
+    @Test
+    public void dateFilterOpenEndRange() {
+        final StringBuilder sql = new StringBuilder("SELECT 1");
+        final MapSqlParameterSource params = new MapSqlParameterSource();
+        final Attributes keys = new Attributes();
+        keys.setString(Tag.StudyDate, VR.DA, "20200101-");
+
+        newAccess().addDateFilter(sql, params, keys, Tag.StudyDate, "e.date");
+
+        final String result = sql.toString();
+        assertTrue(result.contains("AND e.date >= :dateStart"));
+        assertFalse(result.contains("dateEnd"));
+        assertEquals("2020-01-01", params.getValue("dateStart"));
+    }
+
+    /**
+     * Creates a DimseDataAccess without loading SQL resources,
+     * for testing filter methods only.
+     */
+    private static DimseDataAccess newAccess() {
+        return new DimseDataAccess();
+    }
+}

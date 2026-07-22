@@ -101,6 +101,7 @@ dependencies {
     compileOnly "org.nrg:config"
     compileOnly "org.springframework:spring-beans"
     compileOnly "org.springframework:spring-context"
+    compileOnly "org.springframework:spring-jdbc"
     compileOnly "org.springframework:spring-web"
     compileOnly "org.springframework:spring-webmvc"
     compileOnly "io.springfox:springfox-swagger2"
