@@ -245,7 +245,9 @@ public class DimseDataAccess {
                                   final MapSqlParameterSource params,
                                   final Attributes keys) {
         addUidFilter(sql, params, keys, Tag.SeriesInstanceUID, "sc.uid");
-        addStringFilter(sql, params, keys, Tag.Modality, "sc.modality", "modality");
+        addStringFilter(sql, params,
+                dicomToXnatModality(keys.getString(Tag.Modality)),
+                "sc.modality", "modality");
         addStringFilter(sql, params, keys, Tag.SeriesNumber, "sc.id", "seriesNumber");
     }
 
@@ -287,8 +289,10 @@ public class DimseDataAccess {
     }
 
     /**
-     * Adds a string-valued filter. Uses LIKE for wildcard patterns,
-     * exact match otherwise.
+     * Adds a case-insensitive string filter for the given tag,
+     * translating DICOM wildcards ({@code *}, {@code ?}) to a SQL
+     * {@code ILIKE} pattern. A value with no wildcards becomes a
+     * case-insensitive exact match.
      */
     void addStringFilter(final StringBuilder sql,
                                  final MapSqlParameterSource params,
@@ -296,19 +300,26 @@ public class DimseDataAccess {
                                  final int tag,
                                  final String column,
                                  final String paramName) {
-        final String value = keys.getString(tag);
+        addStringFilter(sql, params, keys.getString(tag), column, paramName);
+    }
+
+    /**
+     * Adds a case-insensitive string filter for an explicit value.
+     * Used where the query value needs preprocessing before matching
+     * (e.g. the {@code PT} to {@code PET} Modality reverse mapping in
+     * {@link #addSeriesFilters}).
+     */
+    void addStringFilter(final StringBuilder sql,
+                                 final MapSqlParameterSource params,
+                                 final String value,
+                                 final String column,
+                                 final String paramName) {
         if (StringUtils.isEmpty(value)) {
             return;
         }
-        if (DicomMatchUtils.containsWildcard(value)) {
-            sql.append(" AND ").append(column)
-                    .append(" LIKE :").append(paramName);
-            params.addValue(paramName, DicomMatchUtils.toSqlLike(value));
-        } else {
-            sql.append(" AND ").append(column)
-                    .append(" = :").append(paramName);
-            params.addValue(paramName, value);
-        }
+        sql.append(" AND ").append(column)
+                .append(" ILIKE :").append(paramName);
+        params.addValue(paramName, DicomMatchUtils.toSqlLike(value));
     }
 
     /**
@@ -421,6 +432,19 @@ public class DimseDataAccess {
         } else {
             return modality;
         }
+    }
+
+    /**
+     * Reverses the {@link #dicomModality} mapping for query matching so
+     * that a query using the DICOM code {@code PT} matches scans whose
+     * XNAT modality is {@code PET}. Other values (including wildcards
+     * and {@code null}) pass through unchanged.
+     *
+     * @param dicomModality the Modality value from the query
+     * @return the value to match against the XNAT modality column
+     */
+    static String dicomToXnatModality(final String dicomModality) {
+        return "PT".equalsIgnoreCase(dicomModality) ? "PET" : dicomModality;
     }
 
     /**

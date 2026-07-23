@@ -64,13 +64,11 @@ public final class DicomMatchUtils {
             }
         }
         if (containsWildcard(queryValue)) {
-            return matchesWildcard(queryValue, candidateValue, vr == VR.PN);
+            return matchesWildcard(queryValue, candidateValue);
         }
-        // Single value exact match
-        if (vr == VR.PN) {
-            return candidateValue.equalsIgnoreCase(queryValue);
-        }
-        return candidateValue.equals(queryValue);
+        // Single value exact match, case-insensitive (consistent with
+        // the case-insensitive SQL push-down in DimseDataAccess).
+        return candidateValue.equalsIgnoreCase(queryValue);
     }
 
     /**
@@ -95,13 +93,13 @@ public final class DicomMatchUtils {
 
     /**
      * Matches using DICOM wildcard rules: '*' matches any sequence
-     * of characters, '?' matches any single character.
+     * of characters, '?' matches any single character. Matching is
+     * case-insensitive.
      */
-    static boolean matchesWildcard(final String pattern, final String value,
-                                   final boolean caseInsensitive) {
+    static boolean matchesWildcard(final String pattern, final String value) {
         final String regex = wildcardToRegex(pattern);
-        final int flags = caseInsensitive ? Pattern.CASE_INSENSITIVE : 0;
-        return Pattern.compile(regex, flags).matcher(value).matches();
+        return Pattern.compile(regex, Pattern.CASE_INSENSITIVE)
+                .matcher(value).matches();
     }
 
     /**

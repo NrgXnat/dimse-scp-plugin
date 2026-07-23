@@ -425,11 +425,11 @@ by the SCP are returned with zero length.
 
 ### 5.5 Matching Semantics
 
-- **Single Value Matching:** Case-sensitive for all VRs except
-  PN (Patient Name), which is case-insensitive.
+- **Single Value Matching:** Case-insensitive for all string
+  attributes.
 - **Wildcard Matching:** `*` matches any sequence of
   characters; `?` matches a single character. Available for
-  string VRs. Case-insensitive for PN.
+  string VRs, and case-insensitive.
 - **Date Range Matching:** Format `YYYYMMDD-YYYYMMDD`. Either
   bound may be omitted for an open-ended range.
 - **UID List Matching:** Backslash-separated UID values per
@@ -496,6 +496,10 @@ adjustments:
 - `PET` is converted to `PT` (the standard DICOM code for
   Positron Emission Tomography).
 - Values longer than 16 characters are truncated to 16.
+
+The `PET`→`PT` conversion is also reversed for matching: a
+`Modality` query key of `PT` (SERIES level) matches scans whose
+XNAT modality is `PET`.
 
 ### 5.10 File Count Semantics
 

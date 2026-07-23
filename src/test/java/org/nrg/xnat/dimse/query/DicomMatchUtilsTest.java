@@ -50,6 +50,17 @@ public class DicomMatchUtilsTest {
                 Tag.PatientName, VR.PN, "Smith", "SMITH"));
     }
 
+    @Test
+    public void exactMatchIsCaseInsensitiveForAllVrs() {
+        // R4: matching is case-insensitive throughout, not just for PN.
+        assertTrue(DicomMatchUtils.matchesValue(
+                Tag.AccessionNumber, VR.SH, "acc001", "ACC001"));
+        assertTrue(DicomMatchUtils.matchesValue(
+                Tag.Modality, VR.CS, "ct", "CT"));
+        assertTrue(DicomMatchUtils.matchesValue(
+                Tag.PatientID, VR.LO, "SUBJECT01", "subject01"));
+    }
+
     // --- Wildcard matching ---
 
     @Test
@@ -80,6 +91,15 @@ public class DicomMatchUtilsTest {
     public void wildcardIsCaseInsensitiveForPN() {
         assertTrue(DicomMatchUtils.matchesValue(
                 Tag.PatientName, VR.PN, "sm*", "SMITH"));
+    }
+
+    @Test
+    public void wildcardIsCaseInsensitiveForAllVrs() {
+        // R4: wildcard matching is case-insensitive for every VR.
+        assertTrue(DicomMatchUtils.matchesValue(
+                Tag.PatientID, VR.LO, "sub*", "SUBJECT01"));
+        assertTrue(DicomMatchUtils.matchesValue(
+                Tag.SeriesNumber, VR.IS, "*", "5"));
     }
 
     @Test

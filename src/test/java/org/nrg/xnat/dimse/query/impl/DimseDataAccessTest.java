@@ -193,7 +193,7 @@ public class DimseDataAccessTest {
     }
 
     @Test
-    public void stringFilterExactMatch() {
+    public void stringFilterExactMatchUsesIlike() {
         final StringBuilder sql = new StringBuilder("SELECT 1");
         final MapSqlParameterSource params = new MapSqlParameterSource();
         final Attributes keys = new Attributes();
@@ -202,12 +202,14 @@ public class DimseDataAccessTest {
         newAccess().addStringFilter(sql, params, keys,
                 Tag.PatientName, "e.label", "name");
 
-        assertTrue(sql.toString().contains("AND e.label = :name"));
+        // R4: case-insensitive matching pushed to SQL via ILIKE. A
+        // value with no wildcards is a case-insensitive exact match.
+        assertTrue(sql.toString().contains("AND e.label ILIKE :name"));
         assertEquals("SMITH", params.getValue("name"));
     }
 
     @Test
-    public void stringFilterWildcardUsesLike() {
+    public void stringFilterWildcardUsesIlike() {
         final StringBuilder sql = new StringBuilder("SELECT 1");
         final MapSqlParameterSource params = new MapSqlParameterSource();
         final Attributes keys = new Attributes();
@@ -216,7 +218,7 @@ public class DimseDataAccessTest {
         newAccess().addStringFilter(sql, params, keys,
                 Tag.PatientName, "e.label", "name");
 
-        assertTrue(sql.toString().contains("AND e.label LIKE :name"));
+        assertTrue(sql.toString().contains("AND e.label ILIKE :name"));
         assertEquals("SM%", params.getValue("name"));
     }
 
@@ -230,8 +232,23 @@ public class DimseDataAccessTest {
         newAccess().addStringFilter(sql, params, keys,
                 Tag.PatientName, "e.label", "name");
 
-        assertTrue(sql.toString().contains("LIKE :name"));
+        assertTrue(sql.toString().contains("ILIKE :name"));
         assertEquals("SM_TH", params.getValue("name"));
+    }
+
+    // --- Modality reverse mapping (R3: query PT matches XNAT PET) ---
+
+    @Test
+    public void modalityPtQueryReverseMapsToPet() {
+        assertEquals("PET", DimseDataAccess.dicomToXnatModality("PT"));
+        assertEquals("PET", DimseDataAccess.dicomToXnatModality("pt"));
+    }
+
+    @Test
+    public void modalityOtherValuesPassThrough() {
+        assertEquals("CT", DimseDataAccess.dicomToXnatModality("CT"));
+        assertEquals("MR*", DimseDataAccess.dicomToXnatModality("MR*"));
+        assertNull(DimseDataAccess.dicomToXnatModality(null));
     }
 
     // --- addDateFilter ---
