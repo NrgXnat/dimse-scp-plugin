@@ -34,10 +34,9 @@ navigational only.
   `scp/XnatCGetScp.java:101`.
 - **Single service account** — `scp/ProjectAeResolver.java:49-51`
   (`getUser()` returns the injected `XnatUserProvider`'s user).
-- **No TLS** — no TLS setup in `DimseScpService.start(int)`
-  (`scp/DimseScpService.java:208-246`); the connection is a plain
-  `Connection` with only a port set.
 - **C-FIND results ≠ C-GET file contents** — see §5.7.
+
+(TLS is not a warning; the no-TLS code fact is under §3.1.)
 
 ---
 
@@ -176,13 +175,13 @@ The four levels' return-attribute assembly is spread across
 #### 5.3.1 PATIENT Level
 
 Row mapper: `query/impl/DimseDataAccess.searchPatients`
-(`query/impl/DimseDataAccess.java:142-173`).
+(`query/impl/DimseDataAccess.java:191-220`).
 
 - `PatientID` and `PatientName` both set from the same
-  `subject_label` column (`:155-157`) — see §5.7.
+  `subject_label` column (`:203-204`) — see §5.7.
 - Counts (studies / series / instances):
-  `query/impl/DimseDataAccess.java:166-168`.
-- Gender / DOB: `:159-164` (see §5.8).
+  `query/impl/DimseDataAccess.java:213-215`.
+- Gender / DOB: `:206-210` (see §5.8).
 
 SQL: `src/main/resources/sql/search-patients.sql`. The
 per-subject sub-query joining `xnat_subjectassessordata`,
@@ -193,29 +192,30 @@ computes all three counts in a single scan
 
 #### 5.3.2 STUDY Level
 
-Row mapper: `query/impl/DimseDataAccess.searchStudies`
-(`query/impl/DimseDataAccess.java:57-98`).
+Row mapper: `query/impl/DimseDataAccess.mapStudyRow`
+(`query/impl/DimseDataAccess.java:117-147`), invoked by
+`searchStudies` (`:59-69`).
 
 Notable attribute mappings:
 
-| Conformance attribute | Source column               | Line   |
-|-----------------------|-----------------------------|--------|
-| Study Instance UID    | `uid`                       | `:71`  |
-| Study Date            | `date`                      | `:72`  |
-| Study Time            | `time`                      | `:73`  |
-| Accession Number      | `exptid` (session ID)       | `:74`  |
-| Study ID              | `exptid`                    | `:75`  |
-| Patient Name          | `experiment_label`          | `:76`  |
-| Patient ID            | `subject_label`             | `:77`  |
-| Study Description     | *always empty*              | `:78`  |
-| Modalities in Study   | `modalities` split on `\`   | `:80-84` |
-| # Related Series      | `scan_count`                | `:85`  |
-| # Related Instances   | `file_count`                | `:86`  |
+| Conformance attribute | Source column               | Line    |
+|-----------------------|-----------------------------|---------|
+| Study Instance UID    | `uid`                       | `:121`  |
+| Study Date            | `date`                      | `:122`  |
+| Study Time            | `time`                      | `:123`  |
+| Accession Number      | `exptid` (session ID)       | `:124`  |
+| Study ID              | `exptid`                    | `:125`  |
+| Patient Name          | `experiment_label`          | `:126`  |
+| Patient ID            | `subject_label`             | `:127`  |
+| Study Description     | project ID                  | `:128`  |
+| Modalities in Study   | `modalities` split on `\`   | `:130-133` |
+| # Related Series      | `scan_count`                | `:135`  |
+| # Related Instances   | `file_count`                | `:136`  |
 
 Modalities are aggregated in SQL (`string_agg` with `E'\\'`
 separator) at `sql/search-studies.sql:35-48` and split on the
 Java side using `modalities.split("\\\\")` at
-`query/impl/DimseDataAccess.java:83`.
+`query/impl/DimseDataAccess.java:133`.
 
 Shared-into-project sessions are included by the
 `project_experiments` CTE
@@ -226,7 +226,7 @@ Shared-into-project sessions are included by the
 #### 5.3.3 SERIES Level
 
 Row mapper: `query/impl/DimseDataAccess.searchSeries`
-(`query/impl/DimseDataAccess.java:108-133`).
+(`query/impl/DimseDataAccess.java:157-182`).
 
 SQL: `sql/search-series.sql`. The join scopes results to the
 provided Study UID plus the requested project (or a share into
@@ -261,10 +261,10 @@ than by SQL:
 ### 5.4 Return Key Handling
 
 `DimseDataAccess.copyReturnKeys` at
-`query/impl/DimseDataAccess.java:411-418`: iterates the query
+`query/impl/DimseDataAccess.java:498-505`: iterates the query
 tags and adds a `setNull` for any tag not already present in the
 result, using the VR from the query (or `LO` as fallback). Called
-from every row mapper (`:95`, `:130`, `:170`) and from
+from every row mapper (`:145`, `:179`, `:217`) and from
 `XnatDicomQueryService.catalogEntryToAttributes`
 (`query/impl/XnatDicomQueryService.java:168`).
 
@@ -307,46 +307,59 @@ Matching happens on two sides: indexed keys are pushed to SQL by
 
 **Java side** — `query/DicomMatchUtils.java`:
 
-- `matchesQuery` (`:31-36`) iterates the query's tags,
+- `matchesQuery` (`:35-41`) iterates the query's tags,
   skipping `QueryRetrieveLevel` and `SpecificCharacterSet`,
-  and requires every remaining key to match.
-- `matchesValue` (`:48-72`) dispatches by VR:
-  - Empty query value → universal match (`:51-53`).
+  and requires every remaining key to match via `matchesAnyValue`.
+- `matchesAnyValue` (`:61-73`) matches the single query value
+  against *all* of the candidate's values (`candidate.getStrings`),
+  succeeding if any matches. This lets a single-value query on a
+  multi-valued attribute — Modalities in Study (0008,0061) — match
+  when the study includes that value (conformance §5.5); only the
+  first *query* value is used (no PS3.4 C.2.2.2.8 multi-value keys).
+- `matchesValue` (`:85-109`) dispatches by VR:
+  - Empty query value → universal match (`:88-90`).
   - Empty candidate against a non-empty query → no match
-    (`:54-56`).
-  - `VR.UI` → `matchesUidList` (`:58-60`, `:155-160`).
+    (`:91-93`).
+  - `VR.UI` → `matchesUidList` (`:95-97`, `:192-197`).
   - `VR.DA` / `VR.DT` / `VR.TM` → `matchesDateRange` when
-    a `-` is present (`:61-65`, `:141-150`).
-  - Wildcards → `matchesWildcard` (`:66-68`, `:99-103`) via a
-    regex from `wildcardToRegex` (`:111-134`), compiled with
+    a `-` is present (`:98-102`, `:178-187`).
+  - Wildcards → `matchesWildcard` (`:103-105`, `:136-140`) via a
+    regex from `wildcardToRegex` (`:148-171`), compiled with
     `CASE_INSENSITIVE`.
   - Otherwise a case-insensitive exact match
-    (`equalsIgnoreCase`, `:69-71`) — for every VR, not only PN
+    (`equalsIgnoreCase`, `:106-108`) — for every VR, not only PN
     (R4).
 
-**SQL side** — `query/impl/DimseDataAccess.java`:
+**SQL side** — `query/impl/DimseDataAccess.java`. Filters are
+appended as ` AND …` by `buildStudyQuery` (`:80-86`) and
+`buildPatientQuery` (`:97-102`) and bind to a top-level `WHERE` in
+each base query: `search-studies.sql` ends with a `WHERE TRUE`
+anchor and `search-patients.sql` parenthesizes its project-scope
+disjunction, so the filters restrict rows rather than attaching to
+a `LEFT JOIN … ON`. (`search-series.sql` was already correct.)
 
-- `addStudyFilters` (`:232-240`): StudyInstanceUID, StudyDate,
+- `addStudyFilters` (`:260-268`): StudyInstanceUID, StudyDate,
   AccessionNumber, PatientID, PatientName.
-- `addSeriesFilters` (`:244-252`): SeriesInstanceUID, Modality
+- `addSeriesFilters` (`:272-280`): SeriesInstanceUID, Modality
   (reverse-mapped PT→PET via `dicomToXnatModality`; see §5.9),
   SeriesNumber.
-- `addPatientFilters` (`:256-263`): PatientID, PatientName.
-- `addUidFilter` (`:271-289`): single UID → `= :uid`; list →
+- `addPatientFilters` (`:284-291`): PatientID, PatientName.
+- `addUidFilter` (`:299-317`): single UID → `= :uid`; list →
   `IN (:uidList)` (UIDs matched exactly).
-- `addStringFilter` — `:297-304` (by tag) delegates to the
-  explicit-value overload `:312-323`, which emits
+- `addStringFilter` — `:325-332` (by tag) delegates to the
+  explicit-value overload `:340-351`, which emits
   `ILIKE :param` with the value routed through
-  `DicomMatchUtils.toSqlLike` (`:170-193`) (R4). A value with no
+  `DicomMatchUtils.toSqlLike` (`:207-230`) (R4). A value with no
   wildcards is a case-insensitive exact match; the overload lets
   `addSeriesFilters` pass the reverse-mapped Modality.
-- `addDateFilter` (`:329-370`): range or exact. Each bound is
+- `addDateFilter` (`:357-398`): range or exact. Each bound is
   validated with `DicomMatchUtils.isValidDicomDate` (strict
   `uuuuMMdd` via `LocalDate`); a malformed bound is skipped and
   logged (so an out-of-range value like `20160732` cannot crash
   the query). Valid bounds are converted to `YYYY-MM-DD`
-  (`dicomDateToIso`) and compared as `CAST(:param AS DATE)` so
-  the `date` column is not compared against a bound string.
+  (`dicomDateToIso`, `:264-271`) and compared as
+  `CAST(:param AS DATE)` so the `date` column is not compared
+  against a bound string.
 
 Note the two-layer arrangement: even for SQL-pushed keys, the
 Java `matchesQuery` filter runs afterwards
@@ -372,19 +385,19 @@ All handled inside the SQL row mappers, with no additional
 translation layer:
 
 - **Patient Name @ STUDY** = `experiment_label` (session label):
-  `query/impl/DimseDataAccess.java:76`.
+  `query/impl/DimseDataAccess.java:126`.
 - **Patient Name @ PATIENT** = `subject_label` (same column as
-  Patient ID): `query/impl/DimseDataAccess.java:155-157`.
+  Patient ID): `query/impl/DimseDataAccess.java:203-204`.
 - **Patient ID @ STUDY** = subject label within the queried
   project, from the `project_experiments` / subject-label
   sub-select in `sql/search-studies.sql:5-15, 69-79`; column
-  mapped at `query/impl/DimseDataAccess.java:77`.
+  mapped at `query/impl/DimseDataAccess.java:127`.
 - **Accession Number** = `exptid` (XNAT session ID):
-  `query/impl/DimseDataAccess.java:74`.
-- **Study ID** = `exptid`: `query/impl/DimseDataAccess.java:75`.
+  `query/impl/DimseDataAccess.java:124`.
+- **Study ID** = `exptid`: `query/impl/DimseDataAccess.java:125`.
 - **Study Description** = the XNAT project ID:
-  `query/impl/DimseDataAccess.java:78` sets it from the
-  `projectId` parameter of `searchStudies`. This matches the
+  `query/impl/DimseDataAccess.java:128` sets it from the
+  `projectId` parameter of `mapStudyRow`. This matches the
   XNAT DICOMweb plugin (`XnatDicomServiceImpl`, Study
   Description = project ID). Reconciled under R1
   (`CONFORMANCE-RECONCILIATION-PLAN.md`) on 2026-07-23; prior
@@ -392,13 +405,13 @@ translation layer:
   conformance statement described it as the session note.
 - **Referring Physician Name** = always empty — not set by the
   row mapper, so `copyReturnKeys`
-  (`query/impl/DimseDataAccess.java:411-418`) emits a zero-length
+  (`query/impl/DimseDataAccess.java:498-505`) emits a zero-length
   value if the SCU requested it.
 
 ### 5.8 Gender Mapping
 
 `query/impl/DimseDataAccess.genderToDicomSex`
-(`query/impl/DimseDataAccess.java:379-390`).
+(`query/impl/DimseDataAccess.java:453-464`).
 
 - Blank / null → `Optional.empty()` (not included in response).
 - `m` / `male` (case-insensitive) → `M`.
@@ -408,17 +421,17 @@ translation layer:
 ### 5.9 Modality Mapping
 
 - On the row-mapper side, `dicomModality`
-  (`query/impl/DimseDataAccess.java:425-435`) maps `PET` → `PT`
+  (`query/impl/DimseDataAccess.java:469-479`) maps `PET` → `PT`
   and truncates values longer than 16 characters. Used by
-  `searchSeries` at `:144`.
+  `searchSeries` at `:174`.
 - On the SQL side (STUDY level aggregation), the same `PET`→`PT`
   and length-16 truncation appears inside
   `sql/search-studies.sql:35-48` (in the `scan_modalities`
   CTE) before the values are `string_agg`ed and returned as the
   `modalities` column.
 - **Reverse mapping for matching (R3).** `dicomToXnatModality`
-  (`query/impl/DimseDataAccess.java:446-448`) maps a query value
-  of `PT` back to `PET`; `addSeriesFilters` (`:244-252`) applies
+  (`query/impl/DimseDataAccess.java:490-492`) maps a query value
+  of `PT` back to `PET`; `addSeriesFilters` (`:272-280`) applies
   it before building the SERIES `Modality` filter, so a query
   using the DICOM code `PT` matches scans whose XNAT modality is
   `PET`. Other values (and wildcards) pass through unchanged.
@@ -707,9 +720,9 @@ should start here.
 - `src/main/java/org/nrg/xnat/dimse/query/DicomQueryService.java`
 - `src/main/java/org/nrg/xnat/dimse/query/impl/XnatDicomQueryService.java`
 - `src/main/java/org/nrg/xnat/dimse/query/impl/DimseDataAccess.java`
-  (focused on `:57-98, :108-133, :142-173` row mappers;
-  `:213-324` filter builders; `:379-405` gender/modality
-  mapping; `:411-418` `copyReturnKeys`)
+  (focused on `:117-147, :157-182, :191-220` row mappers;
+  `:260-398` filter builders; `:453-492` gender/modality
+  mapping; `:498-505` `copyReturnKeys`)
 - `src/main/java/org/nrg/xnat/dimse/CatalogEntryUtils.java`
 - `src/main/java/org/nrg/dcm/FileInstanceLocator.java`
 - `src/main/java/org/nrg/xnat/dimse/config/DimsePreferences.java`
@@ -744,8 +757,8 @@ Previously-known deviation, now resolved:
 - **Study Description** — earlier drafts emitted a literal empty
   string while §5.7 claimed the XNAT session note. Reconciled
   under R1 (`CONFORMANCE-RECONCILIATION-PLAN.md`) on 2026-07-23:
-  `query/impl/DimseDataAccess.java:78` now sets the project ID,
-  and §0.6 / §5.3.2 / §5.7 of the conformance statement were
+  `query/impl/DimseDataAccess.java:128` now sets the project ID,
+  and §0 / §5.3.2 / §5.7 of the conformance statement were
   updated to match.
 
 ---

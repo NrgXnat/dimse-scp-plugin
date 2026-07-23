@@ -134,6 +134,47 @@ public class DimseDataAccessTest {
         assertEquals("SUBJ_1", attrs.getString(Tag.PatientID));
     }
 
+    // --- assembled query: filters bind to a real WHERE clause ---
+
+    @Test
+    public void studyQueryBindsFilterToWhereAnchor() {
+        final Attributes keys = new Attributes();
+        keys.setString(Tag.PatientName, VR.PN, "SMITH");
+        final MapSqlParameterSource params = new MapSqlParameterSource();
+
+        final String sql = newAccess().buildStudyQuery(keys, params);
+
+        // The filter must extend the WHERE TRUE anchor, not the trailing
+        // LEFT JOIN ... ON (which would not restrict study rows).
+        assertTrue(sql.contains(
+                "WHERE TRUE AND pe.experiment_label ILIKE :patientName"));
+        assertTrue(sql.indexOf("WHERE TRUE") < sql.indexOf("ORDER BY"));
+    }
+
+    @Test
+    public void studyQueryWithNoKeysHasWhereAnchor() {
+        final String sql = newAccess()
+                .buildStudyQuery(new Attributes(), new MapSqlParameterSource());
+
+        assertTrue(sql.contains("WHERE TRUE"));
+        assertTrue(sql.contains("ORDER BY"));
+    }
+
+    @Test
+    public void patientQueryGroupsProjectDisjunction() {
+        final Attributes keys = new Attributes();
+        keys.setString(Tag.PatientID, VR.LO, "SUBJ1");
+        final MapSqlParameterSource params = new MapSqlParameterSource();
+
+        final String sql = newAccess().buildPatientQuery(keys, params);
+
+        // The project-scope disjunction is parenthesized so the appended
+        // AND applies to the whole predicate, not just the EXISTS branch.
+        assertTrue(sql.contains("WHERE (s.project = :projectId"));
+        assertTrue(sql.contains(
+                "AND COALESCE(psl.subject_label, s.label) ILIKE :patientId"));
+    }
+
     // --- addUidFilter ---
 
     @Test

@@ -160,6 +160,55 @@ public class DicomMatchUtilsTest {
                 Tag.StudyInstanceUID, VR.UI, "1.2.3\\4.5.6\\7.8.9", "0.0.0"));
     }
 
+    // --- Multi-valued attribute matching (Modalities in Study) ---
+
+    @Test
+    public void multiValuedCandidateMatchesAnyValue() {
+        assertTrue(DicomMatchUtils.matchesAnyValue(
+                Tag.ModalitiesInStudy, VR.CS, "PT", new String[]{"CT", "PT"}));
+        assertTrue(DicomMatchUtils.matchesAnyValue(
+                Tag.ModalitiesInStudy, VR.CS, "CT", new String[]{"CT", "PT"}));
+        // case-insensitive, per R4
+        assertTrue(DicomMatchUtils.matchesAnyValue(
+                Tag.ModalitiesInStudy, VR.CS, "pt", new String[]{"CT", "PT"}));
+    }
+
+    @Test
+    public void multiValuedCandidateRejectsAbsentAndEmpty() {
+        assertFalse(DicomMatchUtils.matchesAnyValue(
+                Tag.ModalitiesInStudy, VR.CS, "MR", new String[]{"CT", "PT"}));
+        assertFalse(DicomMatchUtils.matchesAnyValue(
+                Tag.ModalitiesInStudy, VR.CS, "CT", null));
+        // universal query matches regardless
+        assertTrue(DicomMatchUtils.matchesAnyValue(
+                Tag.ModalitiesInStudy, VR.CS, "", new String[]{"CT"}));
+    }
+
+    @Test
+    public void queryMatchesStudyContainingModality() {
+        final Attributes query = new Attributes();
+        query.setString(Tag.QueryRetrieveLevel, VR.CS, "STUDY");
+        query.setString(Tag.ModalitiesInStudy, VR.CS, "PT");
+
+        final Attributes candidate = new Attributes();
+        // multi-valued, as built from string_agg + split
+        candidate.setString(Tag.ModalitiesInStudy, VR.CS, "CT", "PT");
+
+        assertTrue(DicomMatchUtils.matchesQuery(query).test(candidate));
+    }
+
+    @Test
+    public void queryRejectsStudyWithoutModality() {
+        final Attributes query = new Attributes();
+        query.setString(Tag.QueryRetrieveLevel, VR.CS, "STUDY");
+        query.setString(Tag.ModalitiesInStudy, VR.CS, "MR");
+
+        final Attributes candidate = new Attributes();
+        candidate.setString(Tag.ModalitiesInStudy, VR.CS, "CT", "PT");
+
+        assertFalse(DicomMatchUtils.matchesQuery(query).test(candidate));
+    }
+
     // --- Full Attributes matching ---
 
     @Test

@@ -61,14 +61,44 @@ public class DimseDataAccess {
         final MapSqlParameterSource params = new MapSqlParameterSource();
         params.addValue("projectId", projectId);
 
+        final String sql = buildStudyQuery(keys, params);
+        log.trace("Study query SQL: {}", sql);
+
+        return getTemplate().query(sql, params,
+                (rs, rowNum) -> mapStudyRow(rs, projectId, keys)).stream();
+    }
+
+    /**
+     * Assembles the STUDY-level query: base SQL plus the pushed filters
+     * and ordering. Package-private so tests can assert that filters
+     * bind to the query's {@code WHERE} clause.
+     *
+     * @param keys   the C-FIND query keys
+     * @param params parameter source populated with the bound values
+     * @return the assembled SQL
+     */
+    String buildStudyQuery(final Attributes keys,
+                           final MapSqlParameterSource params) {
         final StringBuilder sql = new StringBuilder(studySql);
         addStudyFilters(sql, params, keys);
         sql.append(" ORDER BY e.date, e.time, e.id");
+        return sql.toString();
+    }
 
-        log.trace("Study query SQL: {}", sql);
-
-        return getTemplate().query(sql.toString(), params,
-                (rs, rowNum) -> mapStudyRow(rs, projectId, keys)).stream();
+    /**
+     * Assembles the PATIENT-level query: base SQL plus the pushed
+     * filters. Package-private so tests can assert that the project
+     * scope predicate is grouped and filters bind to it.
+     *
+     * @param keys   the C-FIND query keys
+     * @param params parameter source populated with the bound values
+     * @return the assembled SQL
+     */
+    String buildPatientQuery(final Attributes keys,
+                             final MapSqlParameterSource params) {
+        final StringBuilder sql = new StringBuilder(patientSql);
+        addPatientFilters(sql, params, keys);
+        return sql.toString();
     }
 
     /**
@@ -163,12 +193,10 @@ public class DimseDataAccess {
         final MapSqlParameterSource params = new MapSqlParameterSource();
         params.addValue("projectId", projectId);
 
-        final StringBuilder sql = new StringBuilder(patientSql);
-        addPatientFilters(sql, params, keys);
-
+        final String sql = buildPatientQuery(keys, params);
         log.trace("Patient query SQL: {}", sql);
 
-        return getTemplate().query(sql.toString(), params, (rs, rowNum) -> {
+        return getTemplate().query(sql, params, (rs, rowNum) -> {
             final Attributes attrs = new Attributes();
             attrs.setString(Tag.QueryRetrieveLevel, VR.CS, "PATIENT");
             final String label = nvl(rs.getString("subject_label"));

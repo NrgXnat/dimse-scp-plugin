@@ -43,9 +43,12 @@ LEFT JOIN (
     GROUP BY sa.subject_id
 ) study_counts
   ON study_counts.subject_id = s.id
-WHERE s.project = :projectId
+-- Parenthesized so filters appended by DimseDataAccess.addPatientFilters
+-- ("AND ...") apply to the whole project-scope predicate, not just the
+-- EXISTS branch.
+WHERE (s.project = :projectId
    OR EXISTS (
        SELECT 1
        FROM xnat_projectparticipant pp
        WHERE pp.subject_id = s.id
-         AND pp.project = :projectId)
+         AND pp.project = :projectId))

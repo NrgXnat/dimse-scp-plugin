@@ -36,7 +36,40 @@ public final class DicomMatchUtils {
         return candidate -> null != candidate && IntStream.of(query.tags())
                 .filter(tag -> tag != Tag.QueryRetrieveLevel)
                 .filter(tag -> tag != Tag.SpecificCharacterSet)
-                .allMatch(tag -> matchesValue(tag, query.getVR(tag), query.getString(tag), candidate.getString(tag)));
+                .allMatch(tag -> matchesAnyValue(tag, query.getVR(tag),
+                        query.getString(tag), candidate.getStrings(tag)));
+    }
+
+    /**
+     * Tests whether a single query value matches a candidate Attribute
+     * that may hold multiple values. The candidate matches if any one of
+     * its values satisfies {@link #matchesValue}.
+     *
+     * <p>This makes single-value matching against a multi-valued
+     * Attribute — notably Modalities in Study (0008,0061) — succeed when
+     * the study includes the queried value, rather than only when the
+     * first value matches. Matching multi-valued <em>query</em> keys with
+     * logical-AND semantics (PS3.4 C.2.2.2.8) is not implemented; only
+     * the first query value is considered.</p>
+     *
+     * @param tag             the DICOM tag
+     * @param vr              the Value Representation
+     * @param queryValue      the (single) query value
+     * @param candidateValues the candidate's values, or null if absent
+     * @return true if the candidate matches
+     */
+    static boolean matchesAnyValue(final int tag, final VR vr,
+                                   final String queryValue,
+                                   final String[] candidateValues) {
+        if (StringUtils.isEmpty(queryValue)) {
+            return true; // universal match
+        }
+        if (candidateValues == null || candidateValues.length == 0) {
+            return false; // non-empty query cannot match an absent value
+        }
+        return Arrays.stream(candidateValues)
+                .anyMatch(candidateValue ->
+                        matchesValue(tag, vr, queryValue, candidateValue));
     }
 
     /**

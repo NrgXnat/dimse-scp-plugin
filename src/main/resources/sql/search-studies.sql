@@ -85,3 +85,6 @@ LEFT JOIN scan_file_counts sfc
   ON sfc.experiment_id = e.id
 LEFT JOIN scan_modalities sm
   ON sm.experiment_id = e.id
+-- Anchor for the filters appended by DimseDataAccess.addStudyFilters;
+-- project scoping is handled by the project_experiments CTE above.
+WHERE TRUE

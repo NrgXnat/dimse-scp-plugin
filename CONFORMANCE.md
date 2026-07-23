@@ -38,9 +38,7 @@ DICOM users. Read this section before deploying.
    level. There is no per-association authentication. The
    Calling AE Title is logged but not validated.
 
-5. **No TLS.** All communication is over plain TCP.
-
-6. **C-FIND results do not match C-GET file contents.** C-FIND
+5. **C-FIND results do not match C-GET file contents.** C-FIND
    responses are populated from XNAT's data model, not from
    the original DICOM headers. The DICOM files returned by
    C-GET retain their original header values. This means
@@ -369,7 +367,7 @@ project.
 | Patient ID                         | (0010,0020)  | S, W     | R      | Subject label              |
 | Patient Sex                        | (0010,0040)  | —        | O      | Subject gender (see 5.8)   |
 | Patient Birth Date                 | (0010,0030)  | —        | O      | Subject DOB                |
-| Modalities in Study                | (0008,0061)  | —        | O      | Derived from scans         |
+| Modalities in Study                | (0008,0061)  | S        | O      | Derived from scans (see 5.5)|
 | Number of Study Related Series     | (0020,1206)  | —        | O      | Scan count                 |
 | Number of Study Related Instances  | (0020,1208)  | —        | O      | File count (see 5.10)      |
 | Referring Physician Name           | (0008,0090)  | —        | O      | Always empty               |
@@ -438,6 +436,15 @@ by the SCP are returned with zero length.
   PS3.4 C.2.2.2.
 - **Universal Matching:** A zero-length query value matches all
   candidates.
+- **Multi-valued Attribute Matching:** For an attribute that may
+  hold multiple values — notably Modalities in Study (0008,0061)
+  — a single query value matches if any of the study's values
+  matches it (for example, a `PT` query matches a study that
+  contains both CT and PT). Matching a multi-valued *query* key
+  with logical-AND semantics (PS3.4 C.2.2.2.8, e.g. `CT\PT` to
+  require both) needs Extended Negotiation, which is not
+  supported; only the first value of a multi-valued query key is
+  considered.
 - **Relational queries** are not supported.
 
 ### 5.6 C-FIND Status Codes
