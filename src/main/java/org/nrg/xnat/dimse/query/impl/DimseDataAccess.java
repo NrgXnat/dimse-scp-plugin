@@ -17,6 +17,8 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.text.SimpleDateFormat;
 import java.util.Arrays;
 import java.util.List;
@@ -65,36 +67,53 @@ public class DimseDataAccess {
 
         log.trace("Study query SQL: {}", sql);
 
-        return getTemplate().query(sql.toString(), params, (rs, rowNum) -> {
-            final Attributes attrs = new Attributes();
-            attrs.setString(Tag.QueryRetrieveLevel, VR.CS, "STUDY");
-            attrs.setString(Tag.StudyInstanceUID, VR.UI, nvl(rs.getString("uid")));
-            attrs.setString(Tag.StudyDate, VR.DA, formatDate(rs.getDate("date")));
-            attrs.setString(Tag.StudyTime, VR.TM, formatTime(rs.getTimestamp("time")));
-            attrs.setString(Tag.AccessionNumber, VR.SH, nvl(rs.getString("exptid")));
-            attrs.setString(Tag.StudyID, VR.SH, nvl(rs.getString("exptid")));
-            attrs.setString(Tag.PatientName, VR.PN, nvl(rs.getString("experiment_label")));
-            attrs.setString(Tag.PatientID, VR.LO, nvl(rs.getString("subject_label")));
-            attrs.setString(Tag.StudyDescription, VR.LO, "");
+        return getTemplate().query(sql.toString(), params,
+                (rs, rowNum) -> mapStudyRow(rs, projectId, keys)).stream();
+    }
 
-            final String modalities = rs.getString("modalities");
-            if (modalities != null && !modalities.isEmpty()) {
-                attrs.setString(Tag.ModalitiesInStudy, VR.CS,
-                        modalities.split("\\\\"));
-            }
-            attrs.setInt(Tag.NumberOfStudyRelatedSeries, VR.IS, rs.getInt("scan_count"));
-            attrs.setInt(Tag.NumberOfStudyRelatedInstances, VR.IS, rs.getInt("file_count"));
+    /**
+     * Maps a study-level result row to DICOM Attributes.
+     *
+     * <p>Study Description (0008,1030) is set to the XNAT project ID to
+     * match the mapping used by the XNAT DICOMweb plugin; XNAT does not
+     * model a directly queryable clinical study description.</p>
+     *
+     * @param rs        the result set positioned on the row to map
+     * @param projectId the XNAT project ID (the Called AE Title scope)
+     * @param keys      the C-FIND query keys, for return-key copying
+     * @return the row as DICOM Attributes
+     * @throws SQLException if a column cannot be read
+     */
+    static Attributes mapStudyRow(final ResultSet rs, final String projectId,
+                                  final Attributes keys) throws SQLException {
+        final Attributes attrs = new Attributes();
+        attrs.setString(Tag.QueryRetrieveLevel, VR.CS, "STUDY");
+        attrs.setString(Tag.StudyInstanceUID, VR.UI, nvl(rs.getString("uid")));
+        attrs.setString(Tag.StudyDate, VR.DA, formatDate(rs.getDate("date")));
+        attrs.setString(Tag.StudyTime, VR.TM, formatTime(rs.getTimestamp("time")));
+        attrs.setString(Tag.AccessionNumber, VR.SH, nvl(rs.getString("exptid")));
+        attrs.setString(Tag.StudyID, VR.SH, nvl(rs.getString("exptid")));
+        attrs.setString(Tag.PatientName, VR.PN, nvl(rs.getString("experiment_label")));
+        attrs.setString(Tag.PatientID, VR.LO, nvl(rs.getString("subject_label")));
+        attrs.setString(Tag.StudyDescription, VR.LO, projectId);
 
-            genderToDicomSex(rs.getString("subject_gender"))
-                    .ifPresent(sex -> attrs.setString(Tag.PatientSex, VR.CS, sex));
-            final java.sql.Date dob = rs.getDate("subject_dob");
-            if (dob != null) {
-                attrs.setString(Tag.PatientBirthDate, VR.DA, formatDate(dob));
-            }
+        final String modalities = rs.getString("modalities");
+        if (modalities != null && !modalities.isEmpty()) {
+            attrs.setString(Tag.ModalitiesInStudy, VR.CS,
+                    modalities.split("\\\\"));
+        }
+        attrs.setInt(Tag.NumberOfStudyRelatedSeries, VR.IS, rs.getInt("scan_count"));
+        attrs.setInt(Tag.NumberOfStudyRelatedInstances, VR.IS, rs.getInt("file_count"));
 
-            copyReturnKeys(keys, attrs);
-            return attrs;
-        }).stream();
+        genderToDicomSex(rs.getString("subject_gender"))
+                .ifPresent(sex -> attrs.setString(Tag.PatientSex, VR.CS, sex));
+        final java.sql.Date dob = rs.getDate("subject_dob");
+        if (dob != null) {
+            attrs.setString(Tag.PatientBirthDate, VR.DA, formatDate(dob));
+        }
+
+        copyReturnKeys(keys, attrs);
+        return attrs;
     }
 
     /**

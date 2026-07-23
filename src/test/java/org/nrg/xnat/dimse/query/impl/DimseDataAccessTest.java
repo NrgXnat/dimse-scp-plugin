@@ -6,6 +6,7 @@ import org.dcm4che3.data.VR;
 import org.junit.Test;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 
+import java.sql.ResultSet;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
@@ -14,6 +15,8 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 /**
  * Tests for {@link DimseDataAccess} helper methods and SQL filter construction.
@@ -107,6 +110,28 @@ public class DimseDataAccessTest {
         DimseDataAccess.copyReturnKeys(keys, attrs);
 
         assertEquals("SMITH", attrs.getString(Tag.PatientName));
+    }
+
+    // --- mapStudyRow (R1: Study Description = project ID) ---
+
+    @Test
+    public void studyRowSetsStudyDescriptionToProjectId() throws Exception {
+        final ResultSet rs = mock(ResultSet.class);
+        when(rs.getString("exptid")).thenReturn("XNAT_E00001");
+        when(rs.getString("experiment_label")).thenReturn("SESSION_A");
+        when(rs.getString("subject_label")).thenReturn("SUBJ_1");
+
+        final Attributes attrs =
+                DimseDataAccess.mapStudyRow(rs, "MYPROJECT", new Attributes());
+
+        // R1: Study Description is the project ID, matching DICOMweb.
+        assertEquals("MYPROJECT", attrs.getString(Tag.StudyDescription));
+
+        // Sibling mappings, documenting the study row shape.
+        assertEquals("XNAT_E00001", attrs.getString(Tag.AccessionNumber));
+        assertEquals("XNAT_E00001", attrs.getString(Tag.StudyID));
+        assertEquals("SESSION_A", attrs.getString(Tag.PatientName));
+        assertEquals("SUBJ_1", attrs.getString(Tag.PatientID));
     }
 
     // --- addUidFilter ---

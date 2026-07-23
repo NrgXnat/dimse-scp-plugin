@@ -55,7 +55,7 @@ DICOM users. Read this section before deploying.
    - Patient ID = XNAT subject label within the project
    - Accession Number = XNAT session ID
    - Study ID = XNAT session ID
-   - Study Description = XNAT session note
+   - Study Description = XNAT project ID
    Furthermore, any fields returned from C-FIND may differ
    from the corresponding values in the DICOM storage
    instances if post-archival modifications are made to the
@@ -148,9 +148,8 @@ rejected.
 ### 2.3 Sequencing Constraints
 
 The SCP processes requests sequentially within each
-association. Multiple concurrent associations are supported
-via a cached thread pool. There is no limit on concurrent
-associations.
+association. Multiple concurrent associations are supported,
+with no fixed limit on the number of simultaneous associations.
 
 ---
 
@@ -179,7 +178,7 @@ looked up at association time. This means:
   Title.
 - AE titles that do not match a project are rejected at
   request time (the association itself is accepted; the
-  C-FIND or C-GET request returns status 0272H Unable to
+  C-FIND or C-GET request returns status C000H Unable to
   Process).
 - DICOM AE titles are limited to 16 characters. XNAT project
   IDs longer than 16 characters cannot be addressed. A
@@ -311,10 +310,10 @@ sub-operation.
 
 ## 4. C-ECHO SCP
 
-The Verification SOP Class is supported using dcm4che's
-standard implementation. No application-specific processing
-occurs. The SCP responds with status Success (0000H) if the
-association was accepted.
+The Verification SOP Class (C-ECHO) is supported using dcm4che's
+standard implementation, with no application-specific processing;
+the SCP responds with status Success (0000H) if the association
+was accepted.
 
 ---
 
@@ -365,14 +364,14 @@ project.
 | Study Time                         | (0008,0030)  | —        | O      | Session time               |
 | Accession Number                   | (0008,0050)  | S, W     | R      | **Session ID** (see 5.7)   |
 | Study ID                           | (0020,0010)  | —        | O      | Session ID                 |
-| Study Description                  | (0008,1030)  | —        | O      | Session note               |
+| Study Description                  | (0008,1030)  | —        | O      | Project ID (see 5.7)       |
 | Patient Name                       | (0010,0010)  | S, W     | R      | **Session label** (see 5.7)|
 | Patient ID                         | (0010,0020)  | S, W     | R      | Subject label              |
 | Patient Sex                        | (0010,0040)  | —        | O      | Subject gender (see 5.8)   |
 | Patient Birth Date                 | (0010,0030)  | —        | O      | Subject DOB                |
 | Modalities in Study                | (0008,0061)  | —        | O      | Derived from scans         |
 | Number of Study Related Series     | (0020,1206)  | —        | O      | Scan count                 |
-| Number of Study Related Instances  | (0020,1208)  | —        | O      | File count (DICOM only)    |
+| Number of Study Related Instances  | (0020,1208)  | —        | O      | File count (see 5.10)      |
 | Referring Physician Name           | (0008,0090)  | —        | O      | Always empty               |
 
 #### 5.3.3 SERIES Level
@@ -386,7 +385,7 @@ The query must include a Study Instance UID.
 | Modality                             | (0008,0060)  | S        | R      | Scan modality (see 5.9)|
 | Series Number                        | (0020,0011)  | —        | O      | Scan ID                |
 | Series Description                   | (0008,103E)  | —        | O      | Scan series description|
-| Number of Series Related Instances   | (0020,1209)  | —        | O      | File count (DICOM only)|
+| Number of Series Related Instances   | (0020,1209)  | —        | O      | File count (see 5.10)  |
 
 #### 5.3.4 IMAGE Level
 
@@ -439,18 +438,13 @@ by the SCP are returned with zero length.
   candidates.
 - **Relational queries** are not supported.
 
-Indexed attributes (Study Instance UID, Study Date, Accession
-Number, Patient ID, Patient Name) are pushed to SQL for
-efficient matching. Non-indexed attributes are post-filtered
-in Java.
-
 ### 5.6 C-FIND Status Codes
 
 | Status     | Code  | Meaning                              |
 |------------|-------|--------------------------------------|
 | Success    | 0000H | Query completed                      |
 | Pending    | FF00H | Matches remaining                    |
-| Failure    | 0122H | Unable to Process (e.g., unknown AE) |
+| Failure    | C000H | Unable to Process (e.g., unknown AE) |
 | Failure    | A900H | Identifier does not match SOP class  |
 
 ### 5.7 Non-standard Attribute Mappings
@@ -477,8 +471,9 @@ below.
 
 - **Study ID (0020,0010)** is the XNAT session ID.
 
-- **Study Description (0008,1030)** is populated from the
-  XNAT session note field.
+- **Study Description (0008,1030)** is the XNAT project ID
+  (the same value used as the Called AE Title to scope the
+  query), not a clinical study description.
 
 - **Referring Physician Name (0008,0090)** is always empty.
 
@@ -544,25 +539,16 @@ Optional narrowing keys:
 
 ### 6.3 Instance Location
 
-Instances are located by traversing the XNAT catalog
-structure:
+Within the resolved project, C-GET returns instances from
+resources that XNAT identifies as DICOM or secondary data (the
+same resource set used for the file counts in section 5.10).
+Data held under other resource types is not retrievable via
+C-GET, which may cause a session to return fewer instances (or
+none) than its C-FIND counts suggest.
 
-1. Find sessions matching the Study Instance UID or Patient
-   ID within the project.
-2. For each session, iterate over scans (applying the Series
-   Instance UID filter if present).
-3. For each scan, find resource catalogs whose label, format,
-   or content descriptor contains `dicom` or `secondary`
-   (case-insensitive).
-4. For each catalog, iterate over entries of type
-   `CatDcmentryBean` (applying the SOP Instance UID filter
-   if present).
-5. For each entry, resolve the file path and read the DICOM
-   File Meta Information to obtain the SOP Class UID and
-   Transfer Syntax UID.
-
-If a catalog entry's file cannot be found on disk or cannot
-be read, that instance is silently skipped.
+If an instance's file cannot be located on disk or cannot be
+read, that instance is silently skipped — omitted from the
+retrieval rather than reported as a failed sub-operation.
 
 ### 6.4 Transfer Syntax Selection and Transcoding
 
@@ -581,9 +567,7 @@ syntax as follows:
 **Uncompressed transcoding.** When the selected transfer
 syntax differs from the file's native syntax and both are
 uncompressed (IVR LE, EVR LE, or EVR BE), the SCP transcodes
-on the fly by parsing the dataset into memory and
-re-serializing it in the negotiated syntax. This is
-transparent to the SCU.
+on the fly. This is transparent to the SCU.
 
 **Compressed data.** Transcoding to or from compressed
 transfer syntaxes (e.g., JPEG 2000, JPEG-LS, RLE) is not
@@ -598,14 +582,14 @@ syntax.
 | Success    | 0000H | All sub-operations completed         |
 | Pending    | FF00H | Sub-operations remaining             |
 | Warning    | B000H | One or more sub-operations failed    |
-| Failure    | 0122H | Unable to Process (e.g., unknown AE) |
+| Failure    | C000H | Unable to Process (e.g., unknown AE) |
 | Failure    | A900H | Identifier does not match SOP class  |
 | Failure    | A701H | Refused: out of resources (unable to calculate number of matches) |
 | Failure    | A702H | Refused: unable to perform sub-operations |
 
 Status codes for individual C-STORE sub-operations are
-determined by the SCU's C-STORE SCP and by dcm4che's
-BasicRetrieveTask framework.
+determined by the SCU's C-STORE SCP and by dcm4che's retrieve
+handling.
 
 ---
 
@@ -615,8 +599,8 @@ BasicRetrieveTask framework.
 
 There is no DICOM-level authentication. The plugin does not
 implement User Identity Negotiation (PS3.7 D.3.3.7). All
-DICOM operations execute under a single XNAT service account
-configured at the application level.
+DICOM operations execute as a single XNAT user (currently the
+primary administrator account; see section 8.3).
 
 The Calling AE Title is not validated and is not used for
 access control.
@@ -641,12 +625,13 @@ TLS is not supported. All communication is over plain TCP.
 
 ### 7.4 Audit
 
-DICOM operations are logged via SLF4J. C-FIND and C-GET
-requests are logged at DEBUG level with the Calling AE Title,
-Called AE Title, and query level. SCP lifecycle events (start,
-stop) and preference changes are logged at INFO level.
-Association-level details are available at DEBUG level via
-dcm4che's logging.
+DICOM operations are recorded in the XNAT application logs.
+C-FIND and C-GET requests are logged at DEBUG level with the
+Calling AE Title, Called AE Title, and query level. SCP
+lifecycle events (start, stop) and preference changes are
+logged at INFO level. Lower-level association details are
+available at DEBUG level from the underlying dcm4che networking
+layer.
 
 There is no DICOM Audit Trail (PS3.15 A.5).
 
@@ -679,11 +664,17 @@ request time.
 
 ### 8.3 Service Account
 
-The XNAT user under which DICOM operations execute is
-determined by the XNAT `XnatUserProvider` bean. This is
-typically the XNAT administrator or a dedicated service
-account. Configuration is at the XNAT application level, not
-within the DIMSE plugin.
+Because the SCP does not authenticate the connecting DICOM
+client (see section 7.1), all data access is performed as a
+fixed XNAT user. Currently that user is always the XNAT site's
+primary administrator account. There is no plugin setting to
+select a different or dedicated service account.
+
+As a result, queries and retrievals operate with full
+administrative data access. The effective scope of what a
+client can see or retrieve is therefore limited only by the
+project access controls in section 8.4, not by any per-user
+DICOM permissions (see also section 7.2).
 
 ### 8.4 Access Control Settings
 
@@ -757,11 +748,12 @@ or clear the project override.
    set encoding is not handled. Non-ASCII characters in XNAT
    fields may not render correctly in DICOM clients.
 
-6. **PATIENT level counts are expensive.** At the PATIENT
-   query level, Number of Patient Related Studies, Series,
-   and Instances are computed by loading all sessions and
-   scans for each subject. This may be slow for projects with
-   many subjects or large datasets.
+6. **PATIENT level counts may be slower.** At the PATIENT query
+   level, Number of Patient Related Studies, Series, and
+   Instances are aggregated across all of a subject's sessions
+   and scans. For projects with very large numbers of subjects,
+   sessions, or files, PATIENT-level queries may be noticeably
+   slower than STUDY- or SERIES-level queries.
 
 7. **No partial retrieval by query level.** The C-GET SCP
    does not enforce query level semantics beyond using the
