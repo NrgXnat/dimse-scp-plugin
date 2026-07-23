@@ -274,7 +274,7 @@ public class DimseDataAccessTest {
 
         newAccess().addDateFilter(sql, params, keys, Tag.StudyDate, "e.date");
 
-        assertTrue(sql.toString().contains("AND e.date = :dateExact"));
+        assertTrue(sql.toString().contains("AND e.date = CAST(:dateExact AS DATE)"));
         assertEquals("2020-06-15", params.getValue("dateExact"));
     }
 
@@ -288,8 +288,8 @@ public class DimseDataAccessTest {
         newAccess().addDateFilter(sql, params, keys, Tag.StudyDate, "e.date");
 
         final String result = sql.toString();
-        assertTrue(result.contains("AND e.date >= :dateStart"));
-        assertTrue(result.contains("AND e.date <= :dateEnd"));
+        assertTrue(result.contains("AND e.date >= CAST(:dateStart AS DATE)"));
+        assertTrue(result.contains("AND e.date <= CAST(:dateEnd AS DATE)"));
         assertEquals("2020-01-01", params.getValue("dateStart"));
         assertEquals("2020-12-31", params.getValue("dateEnd"));
     }
@@ -305,7 +305,7 @@ public class DimseDataAccessTest {
 
         final String result = sql.toString();
         assertFalse(result.contains("dateStart"));
-        assertTrue(result.contains("AND e.date <= :dateEnd"));
+        assertTrue(result.contains("AND e.date <= CAST(:dateEnd AS DATE)"));
         assertEquals("2020-12-31", params.getValue("dateEnd"));
     }
 
@@ -319,9 +319,39 @@ public class DimseDataAccessTest {
         newAccess().addDateFilter(sql, params, keys, Tag.StudyDate, "e.date");
 
         final String result = sql.toString();
-        assertTrue(result.contains("AND e.date >= :dateStart"));
+        assertTrue(result.contains("AND e.date >= CAST(:dateStart AS DATE)"));
         assertFalse(result.contains("dateEnd"));
         assertEquals("2020-01-01", params.getValue("dateStart"));
+    }
+
+    @Test
+    public void dateFilterInvalidExactDateSkipped() {
+        final StringBuilder sql = new StringBuilder("SELECT 1");
+        final MapSqlParameterSource params = new MapSqlParameterSource();
+        final Attributes keys = new Attributes();
+        keys.setString(Tag.StudyDate, VR.DA, "20200732"); // no July 32
+
+        newAccess().addDateFilter(sql, params, keys, Tag.StudyDate, "e.date");
+
+        // Invalid date is skipped rather than emitted (which would
+        // crash the query with an out-of-range date).
+        assertEquals("SELECT 1", sql.toString());
+        assertFalse(params.hasValue("dateExact"));
+    }
+
+    @Test
+    public void dateFilterInvalidRangeBoundSkipped() {
+        final StringBuilder sql = new StringBuilder("SELECT 1");
+        final MapSqlParameterSource params = new MapSqlParameterSource();
+        final Attributes keys = new Attributes();
+        keys.setString(Tag.StudyDate, VR.DA, "20050701-20160732"); // bad end
+
+        newAccess().addDateFilter(sql, params, keys, Tag.StudyDate, "e.date");
+
+        final String result = sql.toString();
+        assertTrue(result.contains("AND e.date >= CAST(:dateStart AS DATE)"));
+        assertEquals("2005-07-01", params.getValue("dateStart"));
+        assertFalse(result.contains("dateEnd"));
     }
 
     /**

@@ -206,6 +206,25 @@ public class DicomMatchUtilsTest {
         assertEquals("a\\_b", DicomMatchUtils.toSqlLike("a_b"));
     }
 
+    // --- DICOM date validation ---
+
+    @Test
+    public void isValidDicomDateAcceptsRealDates() {
+        assertTrue(DicomMatchUtils.isValidDicomDate("20061214"));
+        assertTrue(DicomMatchUtils.isValidDicomDate("20200229")); // leap year
+    }
+
+    @Test
+    public void isValidDicomDateRejectsBadDates() {
+        assertFalse(DicomMatchUtils.isValidDicomDate("20160732")); // no day 32
+        assertFalse(DicomMatchUtils.isValidDicomDate("20210229")); // not leap
+        assertFalse(DicomMatchUtils.isValidDicomDate("20201301")); // no month 13
+        assertFalse(DicomMatchUtils.isValidDicomDate("2020123"));  // 7 chars
+        assertFalse(DicomMatchUtils.isValidDicomDate("abcd1234"));
+        assertFalse(DicomMatchUtils.isValidDicomDate(""));
+        assertFalse(DicomMatchUtils.isValidDicomDate(null));
+    }
+
     // --- DICOM date to ISO conversion ---
 
     @Test

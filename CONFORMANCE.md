@@ -431,7 +431,9 @@ by the SCP are returned with zero length.
   characters; `?` matches a single character. Available for
   string VRs, and case-insensitive.
 - **Date Range Matching:** Format `YYYYMMDD-YYYYMMDD`. Either
-  bound may be omitted for an open-ended range.
+  bound may be omitted for an open-ended range. A bound that is
+  not a valid calendar date is ignored (not applied as a
+  constraint).
 - **UID List Matching:** Backslash-separated UID values per
   PS3.4 C.2.2.2.
 - **Universal Matching:** A zero-length query value matches all

@@ -340,16 +340,32 @@ public class DimseDataAccess {
             final String start = value.substring(0, dash);
             final String end = value.substring(dash + 1);
             if (!start.isEmpty()) {
-                sql.append(" AND ").append(column).append(" >= :dateStart");
-                params.addValue("dateStart", DicomMatchUtils.dicomDateToIso(start));
+                if (DicomMatchUtils.isValidDicomDate(start)) {
+                    sql.append(" AND ").append(column)
+                            .append(" >= CAST(:dateStart AS DATE)");
+                    params.addValue("dateStart", DicomMatchUtils.dicomDateToIso(start));
+                } else {
+                    log.warn("Ignoring invalid lower date bound '{}' for tag {}",
+                            start, Integer.toHexString(tag));
+                }
             }
             if (!end.isEmpty()) {
-                sql.append(" AND ").append(column).append(" <= :dateEnd");
-                params.addValue("dateEnd", DicomMatchUtils.dicomDateToIso(end));
+                if (DicomMatchUtils.isValidDicomDate(end)) {
+                    sql.append(" AND ").append(column)
+                            .append(" <= CAST(:dateEnd AS DATE)");
+                    params.addValue("dateEnd", DicomMatchUtils.dicomDateToIso(end));
+                } else {
+                    log.warn("Ignoring invalid upper date bound '{}' for tag {}",
+                            end, Integer.toHexString(tag));
+                }
             }
-        } else {
-            sql.append(" AND ").append(column).append(" = :dateExact");
+        } else if (DicomMatchUtils.isValidDicomDate(value)) {
+            sql.append(" AND ").append(column)
+                    .append(" = CAST(:dateExact AS DATE)");
             params.addValue("dateExact", DicomMatchUtils.dicomDateToIso(value));
+        } else {
+            log.warn("Ignoring invalid date '{}' for tag {}",
+                    value, Integer.toHexString(tag));
         }
     }
 

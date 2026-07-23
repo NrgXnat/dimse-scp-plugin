@@ -5,6 +5,10 @@ import org.dcm4che3.data.Attributes;
 import org.dcm4che3.data.Tag;
 import org.dcm4che3.data.VR;
 
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
+import java.time.format.ResolverStyle;
 import java.util.Arrays;
 import java.util.function.Predicate;
 import java.util.regex.Pattern;
@@ -190,6 +194,30 @@ public final class DicomMatchUtils {
             }
         }
         return sb.toString();
+    }
+
+    private static final DateTimeFormatter DICOM_DATE =
+            DateTimeFormatter.ofPattern("uuuuMMdd")
+                    .withResolverStyle(ResolverStyle.STRICT);
+
+    /**
+     * Tests whether a value is a valid DICOM DA date
+     * ({@code YYYYMMDD} naming a real calendar date). Range and
+     * partial-precision values are not accepted.
+     *
+     * @param dicomDate the value to check
+     * @return true if the value is a valid 8-digit calendar date
+     */
+    public static boolean isValidDicomDate(final String dicomDate) {
+        if (dicomDate == null || dicomDate.length() != 8) {
+            return false;
+        }
+        try {
+            LocalDate.parse(dicomDate, DICOM_DATE);
+            return true;
+        } catch (final DateTimeParseException e) {
+            return false;
+        }
     }
 
     /**

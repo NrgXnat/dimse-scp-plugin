@@ -340,9 +340,13 @@ Matching happens on two sides: indexed keys are pushed to SQL by
   `DicomMatchUtils.toSqlLike` (`:170-193`) (R4). A value with no
   wildcards is a case-insensitive exact match; the overload lets
   `addSeriesFilters` pass the reverse-mapped Modality.
-- `addDateFilter` (`:329-354`): range or exact; DICOM `YYYYMMDD`
-  converted to `YYYY-MM-DD` via `dicomDateToIso`
-  (`DicomMatchUtils.java:203-210`) before binding.
+- `addDateFilter` (`:329-370`): range or exact. Each bound is
+  validated with `DicomMatchUtils.isValidDicomDate` (strict
+  `uuuuMMdd` via `LocalDate`); a malformed bound is skipped and
+  logged (so an out-of-range value like `20160732` cannot crash
+  the query). Valid bounds are converted to `YYYY-MM-DD`
+  (`dicomDateToIso`) and compared as `CAST(:param AS DATE)` so
+  the `date` column is not compared against a bound string.
 
 Note the two-layer arrangement: even for SQL-pushed keys, the
 Java `matchesQuery` filter runs afterwards
