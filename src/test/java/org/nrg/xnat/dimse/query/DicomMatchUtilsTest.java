@@ -5,6 +5,8 @@ import org.dcm4che3.data.Tag;
 import org.dcm4che3.data.VR;
 import org.junit.Test;
 
+import java.util.Arrays;
+
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
@@ -153,11 +155,49 @@ public class DicomMatchUtilsTest {
     }
 
     @Test
-    public void uidListMatch() {
-        assertTrue(DicomMatchUtils.matchesValue(
-                Tag.StudyInstanceUID, VR.UI, "1.2.3\\4.5.6\\7.8.9", "4.5.6"));
-        assertFalse(DicomMatchUtils.matchesValue(
-                Tag.StudyInstanceUID, VR.UI, "1.2.3\\4.5.6\\7.8.9", "0.0.0"));
+    public void uidListMatchesEveryListedUid() {
+        // PS3.4 C.2.2.2.2: each UID in the list may generate a match,
+        // independent of list order.
+        final Attributes forward = uidQuery("1.2.3", "4.5.6");
+        final Attributes reverse = uidQuery("4.5.6", "1.2.3");
+        for (final Attributes query : Arrays.asList(forward, reverse)) {
+            assertTrue(DicomMatchUtils.matchesQuery(query).test(study("1.2.3")));
+            assertTrue(DicomMatchUtils.matchesQuery(query).test(study("4.5.6")));
+            assertFalse(DicomMatchUtils.matchesQuery(query).test(study("7.8.9")));
+        }
+    }
+
+    @Test
+    public void singleUidQueryMatchesExactly() {
+        final Attributes query = uidQuery("1.2.3");
+        assertTrue(DicomMatchUtils.matchesQuery(query).test(study("1.2.3")));
+        assertFalse(DicomMatchUtils.matchesQuery(query).test(study("1.2.30")));
+    }
+
+    @Test
+    public void emptyUidQueryIsUniversal() {
+        final Attributes query = new Attributes();
+        query.setNull(Tag.StudyInstanceUID, VR.UI);
+        assertTrue(DicomMatchUtils.matchesQuery(query).test(study("1.2.3")));
+    }
+
+    @Test
+    public void uidListDoesNotMatchAbsentCandidate() {
+        assertFalse(DicomMatchUtils.matchesUidList(
+                new String[] {"1.2.3", "4.5.6"}, null));
+    }
+
+    private static Attributes uidQuery(final String... uids) {
+        final Attributes query = new Attributes();
+        query.setString(Tag.QueryRetrieveLevel, VR.CS, "STUDY");
+        query.setString(Tag.StudyInstanceUID, VR.UI, uids);
+        return query;
+    }
+
+    private static Attributes study(final String uid) {
+        final Attributes candidate = new Attributes();
+        candidate.setString(Tag.StudyInstanceUID, VR.UI, uid);
+        return candidate;
     }
 
     // --- Multi-valued attribute matching (Modalities in Study) ---

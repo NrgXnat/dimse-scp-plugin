@@ -5,6 +5,7 @@ import org.dcm4che3.data.Tag;
 import org.dcm4che3.data.UID;
 import org.dcm4che3.data.VR;
 import org.dcm4che3.net.Association;
+import org.dcm4che3.net.Status;
 import org.dcm4che3.net.pdu.PresentationContext;
 import org.dcm4che3.net.service.DicomServiceException;
 import org.dcm4che3.net.service.QueryTask;
@@ -17,10 +18,13 @@ import org.junit.Test;
 import java.util.Optional;
 import java.util.stream.Stream;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.fail;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -129,6 +133,19 @@ public class XnatCFindScpTest {
     @Test(expected = DicomServiceException.class)
     public void missingQueryLevelThrows() throws DicomServiceException {
         scp.calculateMatches(association, pc, rq, new Attributes());
+    }
+
+    @Test
+    public void studyUidListAboveSeriesLevelIsRejected() {
+        final Attributes keys = keysWithLevel("SERIES");
+        keys.setString(Tag.StudyInstanceUID, VR.UI, "1.2.3", "4.5.6");
+        try {
+            scp.calculateMatches(association, pc, rq, keys);
+            fail("expected DicomServiceException");
+        } catch (final DicomServiceException e) {
+            assertEquals(Status.UnableToProcess, e.getStatus());
+        }
+        verify(queryService, never()).findSeries(any(), any(), any());
     }
 
     private static Attributes keysWithLevel(final String level) {

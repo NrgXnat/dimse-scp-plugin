@@ -433,7 +433,13 @@ by the SCP are returned with zero length.
   not a valid calendar date is ignored (not applied as a
   constraint).
 - **UID List Matching:** Backslash-separated UID values per
-  PS3.4 C.2.2.2.
+  PS3.4 C.2.2.2.2; an entity matches if its UID exactly equals
+  any UID in the list. A list is accepted only in the Unique Key
+  of the Query/Retrieve level itself (PS3.4 C.4.1.2.1). A request with
+  more than one value in a Unique Key *above* that level — Study
+  Instance UID at SERIES or IMAGE level, or Series Instance UID
+  at IMAGE level — is rejected with status C000H, with Offending
+  Element (0000,0901) identifying the multi-valued attribute.
 - **Universal Matching:** A zero-length query value matches all
   candidates.
 - **Multi-valued Attribute Matching:** For an attribute that may
@@ -455,6 +461,13 @@ by the SCP are returned with zero length.
 | Pending    | FF00H | Matches remaining                    |
 | Failure    | C000H | Unable to Process (e.g., unknown AE) |
 | Failure    | A900H | Identifier does not match SOP class  |
+
+C000H is returned for an unknown Called AE Title, and when a
+Unique Key above the Query/Retrieve level holds more than one
+value (see 5.5); in the latter case the response includes
+Offending Element (0000,0901) and an Error Comment. A900H is
+returned when the Query/Retrieve Level is missing or
+unsupported.
 
 ### 5.7 Non-standard Attribute Mappings
 

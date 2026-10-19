@@ -10,8 +10,11 @@ import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.time.format.ResolverStyle;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.Set;
 import java.util.function.Predicate;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 /**
@@ -36,8 +39,10 @@ public final class DicomMatchUtils {
         return candidate -> null != candidate && IntStream.of(query.tags())
                 .filter(tag -> tag != Tag.QueryRetrieveLevel)
                 .filter(tag -> tag != Tag.SpecificCharacterSet)
-                .allMatch(tag -> matchesAnyValue(tag, query.getVR(tag),
-                        query.getString(tag), candidate.getStrings(tag)));
+                .allMatch(tag -> query.getVR(tag) == VR.UI
+                        ? matchesUidList(query.getStrings(tag), candidate.getStrings(tag))
+                        : matchesAnyValue(tag, query.getVR(tag),
+                                query.getString(tag), candidate.getStrings(tag)));
     }
 
     /**
@@ -93,7 +98,7 @@ public final class DicomMatchUtils {
         }
 
         if (vr == VR.UI) {
-            return matchesUidList(queryValue, candidateValue);
+            return queryValue.equals(candidateValue); // exact
         }
         if (vr == VR.DA || vr == VR.DT || vr == VR.TM) {
             if (isDateRange(queryValue)) {
@@ -187,13 +192,29 @@ public final class DicomMatchUtils {
     }
 
     /**
-     * Matches a UID list (backslash-separated UIDs per PS3.4 C.2.2.2).
+     * List of UID Matching (PS3.4 C.2.2.2.2): each UID in the query
+     * may generate a match, so the candidate matches if any of its
+     * values exactly equals any query UID. A single UID is the
+     * one-element case. An absent or zero-length query value is
+     * universal matching.
+     *
+     * @param queryUids       the query UIDs (dcm4che splits the
+     *                        backslash-delimited list), or null
+     * @param candidateValues the candidate's values, or null if absent
+     * @return true if the candidate matches
      */
-    static boolean matchesUidList(final String queryValue, final String candidateValue) {
-        if (!StringUtils.contains(queryValue, '\\')) {
-            return queryValue.equals(candidateValue);
+    static boolean matchesUidList(final String[] queryUids,
+                                  final String[] candidateValues) {
+        final Set<String> uids = queryUids == null
+                ? Collections.emptySet()
+                : Arrays.stream(queryUids)
+                        .filter(StringUtils::isNotEmpty)
+                        .collect(Collectors.toSet());
+        if (uids.isEmpty()) {
+            return true; // universal match
         }
-        return Arrays.asList(queryValue.split("\\\\")).contains(candidateValue);
+        return candidateValues != null
+                && Arrays.stream(candidateValues).anyMatch(uids::contains);
     }
 
     /**

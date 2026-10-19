@@ -74,7 +74,7 @@ Called-AE-Title-to-project resolution: `scp/ProjectAeResolver.java:60-80`.
 Rejection paths:
 
 - Unknown AE → `DicomServiceException(Status.UnableToProcess)`
-  from the calling SCP (`scp/XnatCFindScp.java:63-68`,
+  from the calling SCP (`scp/XnatCFindScp.java:64-69`,
   `scp/XnatCGetScp.java:83-87`).
 
 ### 2.3 Sequencing Constraints
@@ -103,7 +103,7 @@ Wildcard AE registration: `scp/DimseScpService.java:223`
 
 At request time, the SCPs read the Called AE Title from the
 association and resolve it:
-- C-FIND: `scp/XnatCFindScp.java:57` + `:63-68`.
+- C-FIND: `scp/XnatCFindScp.java:57` + `:64-69`.
 - C-GET: `scp/XnatCGetScp.java:76` + `:83-87`.
 
 The 16-character AE title limit is a DICOM protocol constraint
@@ -153,18 +153,39 @@ The C-FIND SCP is a thin dispatcher; per-level logic is in
 
 ### 5.1 Query Levels
 
-Dispatch: `scp/XnatCFindScp.java:75-91`.
-`QueryLevel` enum: `query/QueryLevel.java:11-12`.
+Dispatch: `scp/XnatCFindScp.java:76-92`.
+`QueryLevel` enum: `query/QueryLevel.java:16-20`; each constant
+carries its level's Unique Key tag (`getUniqueKey`, `:33-35`).
 
 ### 5.2 Query/Retrieve Level Matching
 
-`query/QueryLevel.fromKeys` at `query/QueryLevel.java:21-34`:
+`query/QueryLevel.fromKeys` at `query/QueryLevel.java:80-93`:
 
 - Missing `QueryRetrieveLevel` → `IdentifierDoesNotMatchSOPClass`
-  (`:23-26`).
-- Uppercased, trimmed comparison (`:27`).
-- `INSTANCE` mapped to `IMAGE` (`:29`).
-- Unknown value → `IdentifierDoesNotMatchSOPClass` (`:30-33`).
+  (`:82-85`).
+- Uppercased, trimmed comparison (`:86`).
+- `INSTANCE` mapped to `IMAGE` (`:88`).
+- Unknown value → `IdentifierDoesNotMatchSOPClass` (`:89-92`).
+
+Then `QueryLevel.requireSingleUidKeysAbove`
+(`query/QueryLevel.java:55-71`, called at
+`scp/XnatCFindScp.java:62`) rejects any Identifier whose UID Unique
+Key for a level *above* the query level (Study Instance UID at
+SERIES/IMAGE, Series Instance UID at IMAGE) has more than one
+value. PS3.4 C.4.1.2.1 requires a single value there; only the key
+at the query level may use List of UID Matching. Rejecting is
+deliberate: the per-level lookups (`findSeries`, `findInstances`)
+read those keys with `getString` and would otherwise silently
+answer for the first listed UID only. Patient ID (LO) is not
+checked.
+
+The status is `UnableToProcess` (C000H) with Offending Element
+(0000,0901) set to the multi-valued tag and a short Error Comment
+(`:63-70`), not A900H: the Identifier is valid for the SOP Class —
+the same values would be legal at a lower level — so "Data Set does
+not match SOP Class" would mislead. Table C.4-1 lists Offending
+Element as a related field of Cxxx. Keep the message under 64
+characters; dcm4che truncates the LO Error Comment.
 
 ### 5.3 Matching Keys and Return Keys
 
@@ -314,27 +335,37 @@ Matching happens on two sides: indexed keys are pushed to SQL by
 
 **Java side** — `query/DicomMatchUtils.java`:
 
-- `matchesQuery` (`:35-41`) iterates the query's tags,
+- `matchesQuery` (`:38-46`) iterates the query's tags,
   skipping `QueryRetrieveLevel` and `SpecificCharacterSet`,
-  and requires every remaining key to match via `matchesAnyValue`.
-- `matchesAnyValue` (`:61-73`) matches the single query value
+  and requires every remaining key to match. UI-VR keys go to
+  `matchesUidList` with *all* query values (`getStrings`); every
+  other VR goes to `matchesAnyValue` with the first query value.
+- `matchesUidList` (`:206-218`) implements List of UID Matching
+  (PS3.4 C.2.2.2.2): the candidate matches if any of its values
+  exactly equals any query UID; an absent or
+  all-empty query is universal. dcm4che has already split the
+  backslash-delimited list. Applies to every UI key, so the SQL
+  `IN (:uidList)` push-down and the post-filter agree.
+- `matchesAnyValue` (`:66-78`) matches the single query value
   against *all* of the candidate's values (`candidate.getStrings`),
   succeeding if any matches. This lets a single-value query on a
   multi-valued attribute — Modalities in Study (0008,0061) — match
   when the study includes that value (conformance §5.5); only the
   first *query* value is used (no PS3.4 C.2.2.2.8 multi-value keys).
-- `matchesValue` (`:85-109`) dispatches by VR:
-  - Empty query value → universal match (`:88-90`).
+- `matchesValue` (`:90-114`) dispatches by VR:
+  - Empty query value → universal match (`:93-95`).
   - Empty candidate against a non-empty query → no match
-    (`:91-93`).
-  - `VR.UI` → `matchesUidList` (`:95-97`, `:192-197`).
+    (`:96-98`).
+  - `VR.UI` → exact single-UID comparison
+    (`:100-102`); `matchesQuery` never reaches this for UI keys,
+    which use `matchesUidList`.
   - `VR.DA` / `VR.DT` / `VR.TM` → `matchesDateRange` when
-    a `-` is present (`:98-102`, `:178-187`).
-  - Wildcards → `matchesWildcard` (`:103-105`, `:136-140`) via a
-    regex from `wildcardToRegex` (`:148-171`), compiled with
+    a `-` is present (`:103-107`, `:183-192`).
+  - Wildcards → `matchesWildcard` (`:108-110`, `:141-145`) via a
+    regex from `wildcardToRegex` (`:153-176`), compiled with
     `CASE_INSENSITIVE`.
   - Otherwise a case-insensitive exact match
-    (`equalsIgnoreCase`, `:106-108`) — for every VR, not only PN
+    (`equalsIgnoreCase`, `:111-113`) — for every VR, not only PN
     (R4).
 
 **SQL side** — `query/impl/DimseDataAccess.java`. Filters are
@@ -356,7 +387,7 @@ a `LEFT JOIN … ON`. (`search-series.sql` was already correct.)
 - `addStringFilter` — `:289-296` (by tag) delegates to the
   explicit-value overload `:304-315`, which emits
   `ILIKE :param` with the value routed through
-  `DicomMatchUtils.toSqlLike` (`:207-230`) (R4). A value with no
+  `DicomMatchUtils.toSqlLike` (`:228-251`) (R4). A value with no
   wildcards is a case-insensitive exact match; the overload lets
   `addSeriesFilters` pass the reverse-mapped Modality.
 - `addDateFilter` (`:321-362`): range or exact. Each bound is
@@ -364,7 +395,7 @@ a `LEFT JOIN … ON`. (`search-series.sql` was already correct.)
   `uuuuMMdd` via `LocalDate`); a malformed bound is skipped and
   logged (so an out-of-range value like `20160732` cannot crash
   the query). Valid bounds are converted to `YYYY-MM-DD`
-  (`dicomDateToIso`, `:264-271`) and compared as
+  (`dicomDateToIso`, `:285-292`) and compared as
   `CAST(:param AS DATE)` so the `date` column is not compared
   against a bound string.
 
@@ -381,10 +412,13 @@ non-pushed keys and the VR-specific semantics SQL does not model
   `BasicCFindSCP` / `BasicQueryTask` — no code in this plugin
   writes them explicitly.
 - `Status.UnableToProcess` (C000H) on unknown AE:
-  `scp/XnatCFindScp.java:63-68`.
+  `scp/XnatCFindScp.java:64-69`.
+- `Status.UnableToProcess` (C000H) with Offending Element on a
+  UID list in a Unique Key above the query level:
+  `query/QueryLevel.java:63-70` (§5.2).
 - `Status.IdentifierDoesNotMatchSOPClass` (A900H) on bad level:
-  `scp/XnatCFindScp.java:88-90` and
-  `query/QueryLevel.java:23-26, :30-33`.
+  `scp/XnatCFindScp.java:89-91` and
+  `query/QueryLevel.java:82-85, :89-92`.
 
 ### 5.7 Non-standard Attribute Mappings
 
@@ -599,7 +633,7 @@ Transcoding: `scp/XnatCGetScp.createDataWriter`
 No code path validates the Calling AE Title. Service-account
 identity is delegated to `XnatUserProvider` via
 `scp/ProjectAeResolver.java:49-51` and passed into query/retrieve
-methods (`scp/XnatCFindScp.java:70`,
+methods (`scp/XnatCFindScp.java:71`,
 `scp/XnatCGetScp.java:123`).
 
 ### 7.2 Authorization
@@ -627,7 +661,7 @@ SLF4J only. `@Slf4j` classes:
 - `scp/DimseScpService.java:35` — start / stop at INFO
   (`:245, :275`).
 - `scp/XnatCFindScp.java:29` — request logging at DEBUG
-  (`:59, :72, :102`), reject at WARN (`:65`).
+  (`:59, :73, :103`), reject at WARN (`:66`).
 - `scp/XnatCGetScp.java:51` — DEBUG on request / transcoding
   (`:80, :89, :102`), WARN on missing negotiation (`:263-264`).
 - `scp/ProjectAeResolver.java:25` — DEBUG on resolution

@@ -59,6 +59,7 @@ public class XnatCFindScp extends BasicCFindSCP {
         log.debug("C-FIND from {} to {}, keys {}", callingAet, calledAet, keys);
         final QueryLevel level = QueryLevel.fromKeys(keys);
         log.trace("query level {}", level);
+        level.requireSingleUidKeysAbove(keys);
 
         final XnatProjectdata project = _projectAeResolver.resolve(calledAet)
             .orElseThrow(() -> {
