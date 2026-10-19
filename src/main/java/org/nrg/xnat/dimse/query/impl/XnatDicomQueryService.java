@@ -137,11 +137,13 @@ public class XnatDicomQueryService implements DicomQueryService {
                 XnatImagesessiondata.getXnatImagesessiondatasByField(
                         "xnat:imageSessionData/UID", studyUid, user, false);
 
+        // Owned-or-shared scope, matching the STUDY and SERIES SQL. Catalogs
+        // resolve against the owning project, where the files live.
         return sessions.stream()
-                .filter(s -> projectId.equals(s.getProject()))
-                .flatMap(session -> session.getScans_scan().stream())
-                .filter(scan -> seriesUid.equals(scan.getUid()))
-                .flatMap(scan -> CatalogEntryUtils.scanEntries(scan, projectId))
+                .filter(session -> session.hasProject(projectId))
+                .flatMap(session -> session.getScans_scan().stream()
+                        .filter(scan -> seriesUid.equals(scan.getUid()))
+                        .flatMap(scan -> CatalogEntryUtils.scanEntries(scan, session.getProject())))
                 .map(entry -> catalogEntryToAttributes(entry, studyUid, seriesUid, keys))
                 .filter(DicomMatchUtils.matchesQuery(keys));
     }

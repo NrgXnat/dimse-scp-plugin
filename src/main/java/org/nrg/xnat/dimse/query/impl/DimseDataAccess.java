@@ -219,42 +219,6 @@ public class DimseDataAccess {
         }).stream();
     }
 
-    /**
-     * Resolves scan metadata for IMAGE-level queries without loading
-     * full ORM objects.
-     *
-     * @param projectId the XNAT project ID
-     * @param studyUid  the Study Instance UID
-     * @param seriesUid the Series Instance UID
-     * @return scan references with primary keys and IDs
-     */
-    public List<ScanRef> findScans(final String projectId,
-                                   final String studyUid,
-                                   final String seriesUid) {
-        final String sql =
-                "SELECT sc.xnat_imagescandata_id, sc.id AS scan_id, "
-                + "e.id AS experiment_id "
-                + "FROM xnat_imagescandata sc "
-                + "JOIN xnat_imagesessiondata i ON sc.image_session_id = i.id "
-                + "JOIN xnat_experimentdata e ON e.id = i.id "
-                + "WHERE i.uid = :studyUid AND sc.uid = :seriesUid "
-                + "AND (e.project = :projectId "
-                + "     OR EXISTS ("
-                + "         SELECT 1 FROM xnat_experimentdata_share es "
-                + "         WHERE es.sharing_share_xnat_experimentda_id = e.id "
-                + "           AND es.project = :projectId))";
-
-        final MapSqlParameterSource params = new MapSqlParameterSource();
-        params.addValue("projectId", projectId);
-        params.addValue("studyUid", studyUid);
-        params.addValue("seriesUid", seriesUid);
-
-        return getTemplate().query(sql, params, (rs, rowNum) ->
-                new ScanRef(rs.getInt("xnat_imagescandata_id"),
-                            rs.getString("scan_id"),
-                            rs.getString("experiment_id")));
-    }
-
     // -- Study filters --
 
     private void addStudyFilters(final StringBuilder sql,
@@ -398,31 +362,6 @@ public class DimseDataAccess {
     }
 
     // -- Helpers --
-
-    /**
-     * Reference to a scan row for IMAGE-level queries.
-     */
-    public static final class ScanRef {
-        private final int scanPk;
-        private final String scanId;
-        private final String experimentId;
-
-        ScanRef(final int scanPk, final String scanId,
-                final String experimentId) {
-            this.scanPk = scanPk;
-            this.scanId = scanId;
-            this.experimentId = experimentId;
-        }
-
-        /** @return the xnat_imagescandata primary key */
-        public int getScanPk() { return scanPk; }
-
-        /** @return the scan ID (series number) */
-        public String getScanId() { return scanId; }
-
-        /** @return the experiment (session) ID */
-        public String getExperimentId() { return experimentId; }
-    }
 
     private NamedParameterJdbcTemplate getTemplate() {
         final DataSource ds = XDAT.getContextService().getBean(DataSource.class);

@@ -538,7 +538,9 @@ The C-GET Identifier must contain at least one of:
   provided.
 - **Patient ID (0010,0020):** Retrieves all instances for the
   matching subject (identified by subject label within the
-  project).
+  project). For a subject shared into the project, only that
+  subject's sessions owned by or shared into the project are
+  retrieved; sessions the subject has in other projects are not.
 
 If neither is present, the SCP returns status A900H
 (Identifier Does Not Match SOP Class).

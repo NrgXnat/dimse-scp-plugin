@@ -247,13 +247,20 @@ than by SQL:
 
 - Dispatcher and requirements check:
   `query/impl/XnatDicomQueryService.findInstances`
-  (`query/impl/XnatDicomQueryService.java:117-147`).
+  (`query/impl/XnatDicomQueryService.java:117-149`).
 - Session lookup by Study UID: `:136-138` (still uses XFT ORM).
-- Scan enumeration and catalog walk: `:140-146`.
+- Project scope: `session.hasProject(projectId)` (`:143`) — the
+  XNAT core owned-or-shared rule
+  (`BaseXnatExperimentdata.hasProject`), consistent with the
+  STUDY/SERIES SQL, so every study listed at STUDY level can be
+  queried at IMAGE level.
+- Scan enumeration and catalog walk: `:144-146`. Catalogs are
+  resolved against the session's owning project
+  (`session.getProject()`), not the Called-AE project.
 - Attribute assembly per catalog entry:
   `query/impl/XnatDicomQueryService.catalogEntryToAttributes`
-  (`:152-170`); SOP Class UID pulled from the
-  `SOP_Class_UID` metafield (`:175-181`).
+  (`:154-172`); SOP Class UID pulled from the
+  `SOP_Class_UID` metafield (`:177-183`).
 - Catalog entry streaming: `CatalogEntryUtils.scanEntries`
   (`CatalogEntryUtils.java:57-61`) — delegates to
   `dicomCatalogs` + `catalogEntries`.
@@ -261,12 +268,12 @@ than by SQL:
 ### 5.4 Return Key Handling
 
 `DimseDataAccess.copyReturnKeys` at
-`query/impl/DimseDataAccess.java:498-505`: iterates the query
+`query/impl/DimseDataAccess.java:437-444`: iterates the query
 tags and adds a `setNull` for any tag not already present in the
 result, using the VR from the query (or `LO` as fallback). Called
 from every row mapper (`:145`, `:179`, `:217`) and from
 `XnatDicomQueryService.catalogEntryToAttributes`
-(`query/impl/XnatDicomQueryService.java:168`).
+(`query/impl/XnatDicomQueryService.java:170`).
 
 **Why empty and not a placeholder.** The zero-length values
 produced here (and the always-empty Referring Physician Name, the
@@ -338,21 +345,21 @@ anchor and `search-patients.sql` parenthesizes its project-scope
 disjunction, so the filters restrict rows rather than attaching to
 a `LEFT JOIN … ON`. (`search-series.sql` was already correct.)
 
-- `addStudyFilters` (`:260-268`): StudyInstanceUID, StudyDate,
+- `addStudyFilters` (`:224-232`): StudyInstanceUID, StudyDate,
   AccessionNumber, PatientID, PatientName.
-- `addSeriesFilters` (`:272-280`): SeriesInstanceUID, Modality
+- `addSeriesFilters` (`:236-244`): SeriesInstanceUID, Modality
   (reverse-mapped PT→PET via `dicomToXnatModality`; see §5.9),
   SeriesNumber.
-- `addPatientFilters` (`:284-291`): PatientID, PatientName.
-- `addUidFilter` (`:299-317`): single UID → `= :uid`; list →
+- `addPatientFilters` (`:248-255`): PatientID, PatientName.
+- `addUidFilter` (`:263-281`): single UID → `= :uid`; list →
   `IN (:uidList)` (UIDs matched exactly).
-- `addStringFilter` — `:325-332` (by tag) delegates to the
-  explicit-value overload `:340-351`, which emits
+- `addStringFilter` — `:289-296` (by tag) delegates to the
+  explicit-value overload `:304-315`, which emits
   `ILIKE :param` with the value routed through
   `DicomMatchUtils.toSqlLike` (`:207-230`) (R4). A value with no
   wildcards is a case-insensitive exact match; the overload lets
   `addSeriesFilters` pass the reverse-mapped Modality.
-- `addDateFilter` (`:357-398`): range or exact. Each bound is
+- `addDateFilter` (`:321-362`): range or exact. Each bound is
   validated with `DicomMatchUtils.isValidDicomDate` (strict
   `uuuuMMdd` via `LocalDate`); a malformed bound is skipped and
   logged (so an out-of-range value like `20160732` cannot crash
@@ -405,13 +412,13 @@ translation layer:
   conformance statement described it as the session note.
 - **Referring Physician Name** = always empty — not set by the
   row mapper, so `copyReturnKeys`
-  (`query/impl/DimseDataAccess.java:498-505`) emits a zero-length
+  (`query/impl/DimseDataAccess.java:437-444`) emits a zero-length
   value if the SCU requested it.
 
 ### 5.8 Gender Mapping
 
 `query/impl/DimseDataAccess.genderToDicomSex`
-(`query/impl/DimseDataAccess.java:453-464`).
+(`query/impl/DimseDataAccess.java:392-403`).
 
 - Blank / null → `Optional.empty()` (not included in response).
 - `m` / `male` (case-insensitive) → `M`.
@@ -421,7 +428,7 @@ translation layer:
 ### 5.9 Modality Mapping
 
 - On the row-mapper side, `dicomModality`
-  (`query/impl/DimseDataAccess.java:469-479`) maps `PET` → `PT`
+  (`query/impl/DimseDataAccess.java:408-418`) maps `PET` → `PT`
   and truncates values longer than 16 characters. Used by
   `searchSeries` at `:174`.
 - On the SQL side (STUDY level aggregation), the same `PET`→`PT`
@@ -430,8 +437,8 @@ translation layer:
   CTE) before the values are `string_agg`ed and returned as the
   `modalities` column.
 - **Reverse mapping for matching (R3).** `dicomToXnatModality`
-  (`query/impl/DimseDataAccess.java:490-492`) maps a query value
-  of `PT` back to `PET`; `addSeriesFilters` (`:272-280`) applies
+  (`query/impl/DimseDataAccess.java:429-431`) maps a query value
+  of `PT` back to `PET`; `addSeriesFilters` (`:236-244`) applies
   it before building the SERIES `Modality` filter, so a query
   using the DICOM code `PT` matches scans whose XNAT modality is
   `PET`. Other values (and wildcards) pass through unchanged.
@@ -462,22 +469,45 @@ between C-FIND file counts and what C-GET actually returns.
 ### 6.1 Retrieval Scope
 
 Scope is enforced by the same `ProjectAeResolver` used by C-FIND
-(`scp/XnatCGetScp.java:83-87`) plus a `projectId` filter on the
-session lookup (`scp/XnatCGetScp.java:182`).
+(`scp/XnatCGetScp.java:83-87`) plus `XnatCGetScp.sessionsInProject`
+(`scp/XnatCGetScp.java:228-235`), applied to both lookup paths. It
+keeps imaging sessions for which `hasProject(projectId)` holds —
+XNAT core's owned-or-shared rule — so it matches the C-FIND SQL
+scope.
+
+This filter is the only project boundary on the C-GET path: the
+DIMSE service account (`ProjectAeResolver.getUser`) is the primary
+admin and can read every project, and DIMSE associations carry no
+user identity.
+
+> **Regression hazard.** Any new session lookup on the C-GET or
+> IMAGE path must go through `sessionsInProject` (or apply
+> `hasProject`). In particular, do not return
+> `XnatSubjectdata.getExperiments_experiment()` unfiltered: a
+> subject shared into the project still lists its sessions in
+> every other project, so an unfiltered list would let any AE that
+> knows the in-project subject label retrieve sessions never
+> shared into the project. Likewise, filtering on
+> `projectId.equals(session.getProject())` alone is too narrow —
+> it drops sessions shared into the project that C-FIND lists.
+> Covered by the `sessionsInProject` cases in `XnatCGetScpTest`.
 
 ### 6.2 Instance Identification
 
-`scp/XnatCGetScp.findSessions` (`scp/XnatCGetScp.java:171-193`):
+`scp/XnatCGetScp.findSessions` (`scp/XnatCGetScp.java:174-194`):
 
 - `StudyInstanceUID` values (space-separated; dcm4che returns
   multi-values as an array) drive
   `XnatImagesessiondata.getXnatImagesessiondatasByField`
-  (`:177-181`), filtered by project (`:182`).
+  (`:181-184`), filtered by `sessionsInProject` (`:180`).
 - Falls back to `PatientID` if no Study UIDs are present
-  (`:186-188`) — subject lookup via
-  `XnatSubjectdata.GetSubjectByProjectIdentifier`
-  (`scp/XnatCGetScp.java:203-216`).
-- Neither key present → `A900H` (`:191-192`).
+  (`:187-190`) — subject lookup via
+  `XnatSubjectdata.GetSubjectByProjectIdentifier`, then the
+  subject's experiments filtered by `sessionsInProject`
+  (`scp/XnatCGetScp.java:207-217`). A subject shared into the
+  project contributes only its sessions owned by or shared into
+  the project.
+- Neither key present → `A900H` (`:192-193`).
 
 Optional narrowing keys are applied later in `getInstances`:
 - `SeriesInstanceUID` filter: `scp/XnatCGetScp.java:126-128`.
@@ -486,21 +516,23 @@ Optional narrowing keys are applied later in `getInstances`:
 ### 6.3 Instance Location
 
 `scp/XnatCGetScp.getInstances` at
-`scp/XnatCGetScp.java:121-157` implements the five-step traversal
+`scp/XnatCGetScp.java:121-160` implements the five-step traversal
 from the conformance statement:
 
 1. `findSessions(projectId, keys, user)` — `:124`.
 2. Per-session iteration over `scans_scan`, applying the series
-   filter — `:135-139`.
+   filter — `:135-142`. Catalogs and files are resolved against
+   the session's owning project (`:138`), which differs from the
+   Called-AE project for a shared session.
 3. DICOM catalog selection —
-   `CatalogEntryUtils.dicomCatalogs(scan)` at `:140`. The
+   `CatalogEntryUtils.dicomCatalogs(scan)` at `:143`. The
    "contains `dicom` or `secondary` (case-insensitive)" rule
    is in `CatalogEntryUtils.matchesDicomDescriptor`
    (`CatalogEntryUtils.java:81-87`); it is applied to the
    label, format, and content descriptors by
    `isDicomResource` (`CatalogEntryUtils.java:28-32`).
 4. `CatDcmentryBean` filtering (applying the SOP Instance UID
-   filter): `scp/XnatCGetScp.java:143-149` (SOP filter at `:146`).
+   filter): `scp/XnatCGetScp.java:145-152` (SOP filter at `:149`).
 5. Locator resolution — `FileInstanceLocator.forEntry`
    (`FileInstanceLocator.java:42-57`) opens each file with
    `DicomInputStream`, reads only the File Meta Information,
@@ -510,25 +542,25 @@ from the conformance statement:
 Silent skips:
 - File missing on disk → `null` locator at
   `FileInstanceLocator.java:44-47`, filtered out at
-  `scp/XnatCGetScp.java:148`.
+  `scp/XnatCGetScp.java:151`.
 - I/O failure reading the file meta info → `null` locator at
   `FileInstanceLocator.java:53-56`, likewise filtered.
 - Catalog load failure → logged and skipped at
-  `scp/XnatCGetScp.java:150-152`.
+  `scp/XnatCGetScp.java:153-155`.
 
 ### 6.4 Transfer Syntax Selection and Transcoding
 
 Selection: `scp/XnatCGetScp.negotiatedTransferSyntax`
-(`scp/XnatCGetScp.java:250-266`).
+(`scp/XnatCGetScp.java:269-285`).
 
 - Prefer the file's native TS if it was negotiated for the SOP
-  class (`:252-255`).
+  class (`:271-274`).
 - Fall back through
   `FALLBACK_TRANSFER_SYNTAXES = {EVR LE, IVR LE, EVR BE}`
-  (`scp/XnatCGetScp.java:224-228`) — the first negotiated one
-  wins (`:256-261`).
-- No match → return the native TS (`:265`) and log a warning
-  (`:263-264`); dcm4che will then fail the sub-operation.
+  (`scp/XnatCGetScp.java:243-247`) — the first negotiated one
+  wins (`:275-280`).
+- No match → return the native TS (`:284`) and log a warning
+  (`:282-283`); dcm4che will then fail the sub-operation.
 
 Transcoding: `scp/XnatCGetScp.createDataWriter`
 (`scp/XnatCGetScp.java:100-109`).
@@ -553,7 +585,7 @@ Transcoding: `scp/XnatCGetScp.createDataWriter`
 - `UnableToProcess` (C000H) on unknown AE:
   `scp/XnatCGetScp.java:83-87`.
 - `IdentifierDoesNotMatchSOPClass` (A900H) when neither Study UID
-  nor Patient ID is present: `scp/XnatCGetScp.java:191-192`.
+  nor Patient ID is present: `scp/XnatCGetScp.java:192-193`.
 - `A701H` (out of resources) and `A702H` (unable to perform
   sub-operations) are surfaced only via dcm4che defaults; no
   application code emits them.
@@ -582,9 +614,12 @@ Access is gated at two points:
   project (`scp/ProjectAeResolver.java:74-77`; logic in
   `DimsePreferences.isProjectEnabled` — §8.4).
 
-No per-subject / per-session filtering happens after the project
-gate; C-FIND and C-GET both operate on all archived data
-returned by XFT.
+There is no per-user permission filtering: the service account can
+read every project. After the project gate, each path restricts
+results to data owned by or shared into the project — C-FIND in
+SQL (`sql/search-*.sql`), IMAGE level and C-GET via
+`hasProject` (§5.3.4, §6.1). That project-scope filter is the
+only data boundary between projects.
 
 ### 7.4 Audit
 
