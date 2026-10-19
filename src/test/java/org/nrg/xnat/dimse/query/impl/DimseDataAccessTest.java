@@ -234,6 +234,23 @@ public class DimseDataAccessTest {
     }
 
     @Test
+    public void stringFilterLoneStarNoOp() {
+        // A lone * is universal matching; ILIKE '%' would drop NULL rows.
+        for (final String value : Arrays.asList("*", "**")) {
+            final StringBuilder sql = new StringBuilder("SELECT 1");
+            final MapSqlParameterSource params = new MapSqlParameterSource();
+            final Attributes keys = new Attributes();
+            keys.setString(Tag.PatientID, VR.LO, value);
+
+            newAccess().addStringFilter(sql, params, keys,
+                    Tag.PatientID, "psl.subject_label", "patientId");
+
+            assertEquals("SELECT 1", sql.toString());
+            assertFalse(params.hasValue("patientId"));
+        }
+    }
+
+    @Test
     public void stringFilterExactMatchUsesIlike() {
         final StringBuilder sql = new StringBuilder("SELECT 1");
         final MapSqlParameterSource params = new MapSqlParameterSource();

@@ -66,8 +66,8 @@ public final class DicomMatchUtils {
     static boolean matchesAnyValue(final int tag, final VR vr,
                                    final String queryValue,
                                    final String[] candidateValues) {
-        if (StringUtils.isEmpty(queryValue)) {
-            return true; // universal match
+        if (StringUtils.isEmpty(queryValue) || isUniversalWildcard(queryValue)) {
+            return true; // universal match, even for an absent candidate
         }
         if (candidateValues == null || candidateValues.length == 0) {
             return false; // non-empty query cannot match an absent value
@@ -90,8 +90,8 @@ public final class DicomMatchUtils {
     public static boolean matchesValue(final int tag, final VR vr,
                                        final String queryValue,
                                        final String candidateValue) {
-        if (StringUtils.isEmpty(queryValue)) {
-            return true; // universal match
+        if (StringUtils.isEmpty(queryValue) || isUniversalWildcard(queryValue)) {
+            return true; // universal match, even for an empty candidate
         }
         if (StringUtils.isEmpty(candidateValue)) {
             return false; // non-empty query cannot match empty candidate
@@ -121,6 +121,22 @@ public final class DicomMatchUtils {
      */
     public static boolean containsWildcard(final String value) {
         return StringUtils.containsAny(value, "*?");
+    }
+
+    /**
+     * Tests whether a query value consists only of {@code *} wildcards.
+     * Per PS3.4 C.2.2.2.4, {@code *} matches any sequence of characters
+     * including a zero-length value, and Wild Card Matching on a value
+     * of {@code *} is equivalent to Universal Matching. Such a value
+     * must therefore match empty and absent candidate values, which
+     * ordinary wildcard matching against a stored value would not.
+     *
+     * @param value the query value to check
+     * @return true if the value is non-empty and every character is
+     *         {@code *}
+     */
+    public static boolean isUniversalWildcard(final String value) {
+        return StringUtils.isNotEmpty(value) && StringUtils.containsOnly(value, "*");
     }
 
     /**

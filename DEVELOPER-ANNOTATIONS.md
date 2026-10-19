@@ -289,7 +289,7 @@ than by SQL:
 ### 5.4 Return Key Handling
 
 `DimseDataAccess.copyReturnKeys` at
-`query/impl/DimseDataAccess.java:437-444`: iterates the query
+`query/impl/DimseDataAccess.java:439-446`: iterates the query
 tags and adds a `setNull` for any tag not already present in the
 result, using the VR from the query (or `LO` as fallback). Called
 from every row mapper (`:145`, `:179`, `:217`) and from
@@ -340,7 +340,7 @@ Matching happens on two sides: indexed keys are pushed to SQL by
   and requires every remaining key to match. UI-VR keys go to
   `matchesUidList` with *all* query values (`getStrings`); every
   other VR goes to `matchesAnyValue` with the first query value.
-- `matchesUidList` (`:206-218`) implements List of UID Matching
+- `matchesUidList` (`:222-234`) implements List of UID Matching
   (PS3.4 C.2.2.2.2): the candidate matches if any of its values
   exactly equals any query UID; an absent or
   all-empty query is universal. dcm4che has already split the
@@ -353,16 +353,22 @@ Matching happens on two sides: indexed keys are pushed to SQL by
   when the study includes that value (conformance §5.5); only the
   first *query* value is used (no PS3.4 C.2.2.2.8 multi-value keys).
 - `matchesValue` (`:90-114`) dispatches by VR:
-  - Empty query value → universal match (`:93-95`).
-  - Empty candidate against a non-empty query → no match
+  - Empty query value, or one made only of `*` (checked by
+    `isUniversalWildcard`, `:138-140`) → universal match
+    (`:93-95`). PS3.4 C.2.2.2.4: `*` matches any sequence
+    including a zero-length value, so a lone `*` must also match
+    empty and absent values; it is tested before the
+    empty-candidate rejection below. `matchesAnyValue` applies the
+    same test before rejecting an absent candidate (`:69-71`).
+  - Empty candidate against any other non-empty query → no match
     (`:96-98`).
   - `VR.UI` → exact single-UID comparison
     (`:100-102`); `matchesQuery` never reaches this for UI keys,
     which use `matchesUidList`.
   - `VR.DA` / `VR.DT` / `VR.TM` → `matchesDateRange` when
-    a `-` is present (`:103-107`, `:183-192`).
-  - Wildcards → `matchesWildcard` (`:108-110`, `:141-145`) via a
-    regex from `wildcardToRegex` (`:153-176`), compiled with
+    a `-` is present (`:103-107`, `:199-208`).
+  - Wildcards → `matchesWildcard` (`:108-110`, `:157-161`) via a
+    regex from `wildcardToRegex` (`:169-192`), compiled with
     `CASE_INSENSITIVE`.
   - Otherwise a case-insensitive exact match
     (`equalsIgnoreCase`, `:111-113`) — for every VR, not only PN
@@ -385,17 +391,20 @@ a `LEFT JOIN … ON`. (`search-series.sql` was already correct.)
 - `addUidFilter` (`:263-281`): single UID → `= :uid`; list →
   `IN (:uidList)` (UIDs matched exactly).
 - `addStringFilter` — `:289-296` (by tag) delegates to the
-  explicit-value overload `:304-315`, which emits
+  explicit-value overload `:306-317`, which emits
   `ILIKE :param` with the value routed through
-  `DicomMatchUtils.toSqlLike` (`:228-251`) (R4). A value with no
+  `DicomMatchUtils.toSqlLike` (`:244-267`) (R4). A value with no
   wildcards is a case-insensitive exact match; the overload lets
-  `addSeriesFilters` pass the reverse-mapped Modality.
-- `addDateFilter` (`:321-362`): range or exact. Each bound is
+  `addSeriesFilters` pass the reverse-mapped Modality. An empty
+  value, or one made only of `*`, adds no predicate (`:311-313`):
+  `ILIKE '%'` would drop rows where the column is NULL (for
+  example `psl.subject_label`), contradicting universal matching.
+- `addDateFilter` (`:323-364`): range or exact. Each bound is
   validated with `DicomMatchUtils.isValidDicomDate` (strict
   `uuuuMMdd` via `LocalDate`); a malformed bound is skipped and
   logged (so an out-of-range value like `20160732` cannot crash
   the query). Valid bounds are converted to `YYYY-MM-DD`
-  (`dicomDateToIso`, `:285-292`) and compared as
+  (`dicomDateToIso`, `:301-308`) and compared as
   `CAST(:param AS DATE)` so the `date` column is not compared
   against a bound string.
 
@@ -446,13 +455,13 @@ translation layer:
   conformance statement described it as the session note.
 - **Referring Physician Name** = always empty — not set by the
   row mapper, so `copyReturnKeys`
-  (`query/impl/DimseDataAccess.java:437-444`) emits a zero-length
+  (`query/impl/DimseDataAccess.java:439-446`) emits a zero-length
   value if the SCU requested it.
 
 ### 5.8 Gender Mapping
 
 `query/impl/DimseDataAccess.genderToDicomSex`
-(`query/impl/DimseDataAccess.java:392-403`).
+(`query/impl/DimseDataAccess.java:394-405`).
 
 - Blank / null → `Optional.empty()` (not included in response).
 - `m` / `male` (case-insensitive) → `M`.
@@ -462,7 +471,7 @@ translation layer:
 ### 5.9 Modality Mapping
 
 - On the row-mapper side, `dicomModality`
-  (`query/impl/DimseDataAccess.java:408-418`) maps `PET` → `PT`
+  (`query/impl/DimseDataAccess.java:410-420`) maps `PET` → `PT`
   and truncates values longer than 16 characters. Used by
   `searchSeries` at `:174`.
 - On the SQL side (STUDY level aggregation), the same `PET`→`PT`
@@ -471,7 +480,7 @@ translation layer:
   CTE) before the values are `string_agg`ed and returned as the
   `modalities` column.
 - **Reverse mapping for matching (R3).** `dicomToXnatModality`
-  (`query/impl/DimseDataAccess.java:429-431`) maps a query value
+  (`query/impl/DimseDataAccess.java:431-433`) maps a query value
   of `PT` back to `PET`; `addSeriesFilters` (`:236-244`) applies
   it before building the SERIES `Modality` filter, so a query
   using the DICOM code `PT` matches scans whose XNAT modality is

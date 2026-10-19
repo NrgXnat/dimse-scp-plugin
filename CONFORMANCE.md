@@ -426,8 +426,11 @@ by the SCP are returned with zero length.
 - **Single Value Matching:** Case-insensitive for all string
   attributes.
 - **Wildcard Matching:** `*` matches any sequence of
-  characters; `?` matches a single character. Available for
-  string VRs, and case-insensitive.
+  characters, including none; `?` matches a single character.
+  Available for string VRs, and case-insensitive. A value of
+  `*` alone is equivalent to Universal Matching (PS3.4
+  C.2.2.2.4): it also matches entities whose value for that
+  attribute is empty.
 - **Date Range Matching:** Format `YYYYMMDD-YYYYMMDD`. Either
   bound may be omitted for an open-ended range. A bound that is
   not a valid calendar date is ignored (not applied as a

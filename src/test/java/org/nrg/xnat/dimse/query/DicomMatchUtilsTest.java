@@ -110,6 +110,60 @@ public class DicomMatchUtilsTest {
                 Tag.PatientName, VR.PN, "JO*", "SMITH"));
     }
 
+    // --- Lone * is universal matching (PS3.4 C.2.2.2.4) ---
+
+    @Test
+    public void loneStarMatchesEmptyCandidate() {
+        assertTrue(DicomMatchUtils.matchesValue(
+                Tag.ReferringPhysicianName, VR.PN, "*", ""));
+        assertTrue(DicomMatchUtils.matchesValue(
+                Tag.ReferringPhysicianName, VR.PN, "*", null));
+        assertTrue(DicomMatchUtils.matchesValue(
+                Tag.ReferringPhysicianName, VR.PN, "**", ""));
+    }
+
+    @Test
+    public void loneStarMatchesAbsentCandidate() {
+        assertTrue(DicomMatchUtils.matchesAnyValue(
+                Tag.ReferringPhysicianName, VR.PN, "*", null));
+        assertTrue(DicomMatchUtils.matchesAnyValue(
+                Tag.ReferringPhysicianName, VR.PN, "*", new String[0]));
+    }
+
+    @Test
+    public void otherWildcardsStillRequireAValue() {
+        assertFalse(DicomMatchUtils.matchesValue(
+                Tag.PatientName, VR.PN, "*A*", ""));
+        assertFalse(DicomMatchUtils.matchesValue(
+                Tag.PatientName, VR.PN, "?*", ""));
+        assertFalse(DicomMatchUtils.matchesAnyValue(
+                Tag.PatientName, VR.PN, "S*", null));
+    }
+
+    @Test
+    public void loneStarThroughMatchesQuery() {
+        // Reviewer's probe: ReferringPhysicianName=* must match a study
+        // whose value is zero length.
+        final Attributes query = new Attributes();
+        query.setString(Tag.QueryRetrieveLevel, VR.CS, "STUDY");
+        query.setString(Tag.ReferringPhysicianName, VR.PN, "*");
+        final Attributes candidate = new Attributes();
+        candidate.setNull(Tag.ReferringPhysicianName, VR.PN);
+
+        assertTrue(DicomMatchUtils.matchesQuery(query).test(candidate));
+        assertTrue(DicomMatchUtils.matchesQuery(query).test(new Attributes()));
+    }
+
+    @Test
+    public void isUniversalWildcard() {
+        assertTrue(DicomMatchUtils.isUniversalWildcard("*"));
+        assertTrue(DicomMatchUtils.isUniversalWildcard("***"));
+        assertFalse(DicomMatchUtils.isUniversalWildcard(""));
+        assertFalse(DicomMatchUtils.isUniversalWildcard(null));
+        assertFalse(DicomMatchUtils.isUniversalWildcard("*?"));
+        assertFalse(DicomMatchUtils.isUniversalWildcard("A*"));
+    }
+
     // --- Date range matching ---
 
     @Test

@@ -299,14 +299,16 @@ public class DimseDataAccess {
      * Adds a case-insensitive string filter for an explicit value.
      * Used where the query value needs preprocessing before matching
      * (e.g. the {@code PT} to {@code PET} Modality reverse mapping in
-     * {@link #addSeriesFilters}).
+     * {@link #addSeriesFilters}). A value of only {@code *} adds no
+     * predicate: it is universal matching, and {@code ILIKE '%'} would
+     * wrongly drop rows where the column is NULL.
      */
     void addStringFilter(final StringBuilder sql,
                                  final MapSqlParameterSource params,
                                  final String value,
                                  final String column,
                                  final String paramName) {
-        if (StringUtils.isEmpty(value)) {
+        if (StringUtils.isEmpty(value) || DicomMatchUtils.isUniversalWildcard(value)) {
             return;
         }
         sql.append(" AND ").append(column)
