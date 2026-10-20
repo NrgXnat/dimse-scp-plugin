@@ -10,14 +10,16 @@ JOIN xnat_imagesessiondata i
   ON sc.image_session_id = i.id
 JOIN xnat_experimentdata e
   ON e.id = i.id
-LEFT JOIN (
-    SELECT ar.xnat_imagescandata_xnat_imagescandata_id AS scan_pk,
-           COALESCE(SUM(ar.file_count), 0) AS file_count
+-- Per-scan count, correlated with sc so only this study's scans are read.
+LEFT JOIN LATERAL (
+    SELECT SUM(ar.file_count) AS file_count
     FROM xnat_abstractresource ar
-    WHERE ar.label IN ('secondary', 'DICOM')
-    GROUP BY ar.xnat_imagescandata_xnat_imagescandata_id
-) ar_counts
-  ON ar_counts.scan_pk = sc.xnat_imagescandata_id
+    LEFT JOIN xnat_resource r
+      ON r.xnat_abstractresource_id = ar.xnat_abstractresource_id
+    WHERE ar.xnat_imagescandata_xnat_imagescandata_id = sc.xnat_imagescandata_id
+      -- DICOM resource rule: keep in step with CatalogEntryUtils.isDicomResource
+      AND LOWER(CONCAT_WS(' ', ar.label, r.format, r.content)) LIKE ANY (ARRAY['%dicom%', '%secondary%'])
+) ar_counts ON TRUE
 WHERE i.uid = :studyUid
   AND (e.project = :projectId
        OR EXISTS (

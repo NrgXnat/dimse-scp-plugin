@@ -556,10 +556,18 @@ XNAT modality is `PET`.
 
 Number of Study Related Instances, Number of Series Related
 Instances, and Number of Patient Related Instances count
-files from XNAT resources whose label is `DICOM` or
-`secondary`. Resources labeled `SNAPSHOTS` or with other
-labels are excluded. This means file counts may differ from
-the total number of files visible in the XNAT UI.
+files in the scan resources that C-GET retrieves from (6.3):
+resources whose label, format, or content contains `DICOM` or
+`secondary`, ignoring case (for example `DICOM`, `DICOM_ORIG`,
+`secondary`, or any resource with format `DICOM`). Other
+resources, such as `SNAPSHOTS`, are excluded. Every file in a
+counted resource is included, so a count can exceed the
+instances a C-GET returns if a resource also holds non-DICOM
+files. File counts may also differ from the total number of
+files visible in the XNAT UI.
+
+Number of Patient Related Studies counts the subject's imaging
+sessions in the project; other experiments are not studies.
 
 ---
 
@@ -596,9 +604,10 @@ Optional narrowing keys:
 
 ### 6.3 Instance Location
 
-Within the resolved project, C-GET returns instances from
-resources that XNAT identifies as DICOM or secondary data (the
-same resource set used for the file counts in section 5.10).
+Within the resolved project, C-GET returns the DICOM entries
+of scan catalog resources whose label, format, or content
+contains `DICOM` or `secondary`, ignoring case (the same rule
+as the file counts in section 5.10).
 Data held under other resource types is not retrievable via
 C-GET, which may cause a session to return fewer instances (or
 none) than its C-FIND counts suggest.
@@ -819,8 +828,9 @@ or clear the project override.
    filter by both, regardless of level.
 
 8. **File count may not match XNAT UI.** Instance counts
-   exclude resources not labeled `DICOM` or `secondary` and
-   always exclude `SNAPSHOTS` resources.
+   include only resources whose label, format, or content
+   contains `DICOM` or `secondary` (see 5.10), and include
+   every file in those resources.
 
 9. **Shared sessions.** Sessions shared into a project from
    another project are included in C-FIND results and are

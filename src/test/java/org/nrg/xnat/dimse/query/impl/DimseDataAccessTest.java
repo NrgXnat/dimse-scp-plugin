@@ -468,6 +468,45 @@ public class DimseDataAccessTest {
         assertEquals("2021-01-31", params.getValue("dateEnd1"));
     }
 
+    // --- Count SQL (text checks; C7 integration tests run it) ---
+
+    /** SQL form of CatalogEntryUtils.isDicomResource, used by every count. */
+    private static final String DICOM_RESOURCE_RULE =
+            "LOWER(CONCAT_WS(' ', ar.label, r.format, r.content))"
+            + " LIKE ANY (ARRAY['%dicom%', '%secondary%'])";
+
+    @Test
+    public void everyCountUsesTheCGetResourceRule() {
+        final DimseDataAccess access = newAccess();
+        for (final String sql : Arrays.asList(
+                access.buildStudyQuery(new Attributes(), new MapSqlParameterSource()),
+                access.buildSeriesQuery(new Attributes(), new MapSqlParameterSource()),
+                access.buildPatientQuery(new Attributes(), new MapSqlParameterSource()))) {
+            assertTrue(sql.contains(DICOM_RESOURCE_RULE));
+            assertTrue(sql.contains("LEFT JOIN xnat_resource r"));
+            assertTrue(sql.contains(
+                    "ON r.xnat_abstractresource_id = ar.xnat_abstractresource_id"));
+            assertFalse(sql.contains("label IN"));
+        }
+    }
+
+    @Test
+    public void seriesFileCountIsPerScan() {
+        final String sql = newAccess().buildSeriesQuery(
+                new Attributes(), new MapSqlParameterSource());
+        assertTrue(sql.contains("LEFT JOIN LATERAL"));
+        assertTrue(sql.contains("WHERE ar.xnat_imagescandata_xnat_imagescandata_id"
+                + " = sc.xnat_imagescandata_id"));
+        assertFalse(sql.contains("GROUP BY"));
+    }
+
+    @Test
+    public void patientCountsOnlyImageSessions() {
+        final String sql = newAccess().buildPatientQuery(
+                new Attributes(), new MapSqlParameterSource());
+        assertTrue(sql.contains("JOIN xnat_imagesessiondata i\n      ON i.id = e.id"));
+    }
+
     /**
      * Creates a DimseDataAccess without loading SQL resources,
      * for testing filter methods only.

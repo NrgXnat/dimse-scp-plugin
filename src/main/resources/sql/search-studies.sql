@@ -29,7 +29,10 @@ scan_file_counts AS (
       ON pe.experiment_id = sc.image_session_id
     JOIN xnat_abstractresource ar
       ON ar.xnat_imagescandata_xnat_imagescandata_id = sc.xnat_imagescandata_id
-    WHERE ar.label IN ('secondary', 'DICOM')
+    LEFT JOIN xnat_resource r
+      ON r.xnat_abstractresource_id = ar.xnat_abstractresource_id
+    -- DICOM resource rule: keep in step with CatalogEntryUtils.isDicomResource
+    WHERE LOWER(CONCAT_WS(' ', ar.label, r.format, r.content)) LIKE ANY (ARRAY['%dicom%', '%secondary%'])
     GROUP BY sc.image_session_id
 ),
 scan_modalities AS (

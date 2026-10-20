@@ -25,15 +25,24 @@ LEFT JOIN (
     SELECT sa.subject_id,
            COUNT(DISTINCT e.id) AS study_count,
            COUNT(DISTINCT sc.xnat_imagescandata_id) AS series_count,
-           COALESCE(SUM(ar.file_count), 0) AS instance_count
+           COALESCE(SUM(scan_files.file_count), 0) AS instance_count
     FROM xnat_subjectassessordata sa
     JOIN xnat_experimentdata e
       ON e.id = sa.id
+    -- Only image sessions are studies; other subject assessors are not.
+    JOIN xnat_imagesessiondata i
+      ON i.id = e.id
     LEFT JOIN xnat_imagescandata sc
       ON sc.image_session_id = e.id
-    LEFT JOIN xnat_abstractresource ar
-      ON ar.xnat_imagescandata_xnat_imagescandata_id = sc.xnat_imagescandata_id
-     AND ar.label IN ('secondary', 'DICOM')
+    LEFT JOIN LATERAL (
+        SELECT SUM(ar.file_count) AS file_count
+        FROM xnat_abstractresource ar
+        LEFT JOIN xnat_resource r
+          ON r.xnat_abstractresource_id = ar.xnat_abstractresource_id
+        WHERE ar.xnat_imagescandata_xnat_imagescandata_id = sc.xnat_imagescandata_id
+          -- DICOM resource rule: keep in step with CatalogEntryUtils.isDicomResource
+          AND LOWER(CONCAT_WS(' ', ar.label, r.format, r.content)) LIKE ANY (ARRAY['%dicom%', '%secondary%'])
+    ) scan_files ON TRUE
     WHERE e.project = :projectId
        OR EXISTS (
            SELECT 1

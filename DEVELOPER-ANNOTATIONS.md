@@ -238,11 +238,11 @@ Row mapper: `query/impl/DimseDataAccess.searchPatients`
 - Gender / DOB: `:221-225` (see §5.8).
 
 SQL: `src/main/resources/sql/search-patients.sql`. The
-per-subject sub-query joining `xnat_subjectassessordata`,
-`xnat_experimentdata`, `xnat_imagescandata`, and
-`xnat_abstractresource` (with the DICOM/secondary filter)
-computes all three counts in a single scan
-(`search-patients.sql:24-45`).
+per-subject sub-query `study_counts` (`search-patients.sql:24-54`)
+computes all three counts. It inner-joins `xnat_imagesessiondata`
+(`:33-34`), so only image sessions count as studies (other subject
+assessors are excluded), and sums each scan's DICOM resource files
+in a `LATERAL` sub-query (`:37-45`; §5.10).
 
 #### 5.3.2 STUDY Level
 
@@ -267,7 +267,7 @@ Notable attribute mappings:
 | # Related Instances   | `file_count`                | `:153`  |
 
 Modalities are aggregated in SQL (`string_agg` with `E'\\'`
-separator) at `sql/search-studies.sql:35-48` and split on the
+separator) at `sql/search-studies.sql:38-51` and split on the
 Java side using `modalities.split("\\\\")` at
 `query/impl/DimseDataAccess.java:150`.
 
@@ -284,8 +284,9 @@ Row mapper: `query/impl/DimseDataAccess.searchSeries`
 
 SQL: `sql/search-series.sql`. The join scopes results to the
 provided Study UID plus the requested project (or a share into
-it) at `sql/search-series.sql:21-27`. File count uses
-`ar.label IN ('secondary', 'DICOM')` at `:17`.
+it) at `sql/search-series.sql:23-29`. File count is a `LATERAL`
+sub-query correlated with the scan (`:14-22`), so it reads only this
+study's resources (§5.10).
 
 `Modality` is passed through `dicomModality` (see §5.9).
 
@@ -532,7 +533,7 @@ translation layer:
   Patient ID): `query/impl/DimseDataAccess.java:218-219`.
 - **Patient ID @ STUDY** = subject label within the queried
   project, from the `project_experiments` / subject-label
-  sub-select in `sql/search-studies.sql:5-15, 69-79`; column
+  sub-select in `sql/search-studies.sql:5-15, 72-82`; column
   mapped at `query/impl/DimseDataAccess.java:144`.
 - **Accession Number** = `exptid` (XNAT session ID):
   `query/impl/DimseDataAccess.java:141`.
@@ -568,7 +569,7 @@ translation layer:
   `searchSeries` at `:189`.
 - On the SQL side (STUDY level aggregation), the same `PET`→`PT`
   and length-16 truncation appears inside
-  `sql/search-studies.sql:35-48` (in the `scan_modalities`
+  `sql/search-studies.sql:38-51` (in the `scan_modalities`
   CTE) before the values are `string_agg`ed and returned as the
   `modalities` column.
 - **Reverse mapping for matching (R3).** `dicomToXnatModality`
@@ -580,22 +581,51 @@ translation layer:
 
 ### 5.10 File Count Semantics
 
-The DICOM/secondary label restriction is applied wherever files
-are counted:
+Every file count uses the same resource rule as C-GET,
+`CatalogEntryUtils.isDicomResource` (`CatalogEntryUtils.java:28-32`,
+`:81-87`): a resource counts if its label, format or content
+contains `dicom` or `secondary`, case-insensitive. In SQL the rule
+is one predicate, written identically in all three files:
 
-- STUDY: `sql/search-studies.sql:32`
-  (`ar.label IN ('secondary', 'DICOM')`) — used by
-  `scan_file_counts` CTE (`:24-34`).
-- SERIES: `sql/search-series.sql:17`.
-- PATIENT: `sql/search-patients.sql:36` (inside the aggregation
-  sub-query).
+```sql
+LOWER(CONCAT_WS(' ', ar.label, r.format, r.content)) LIKE ANY (ARRAY['%dicom%', '%secondary%'])
+```
 
-The C-GET side is *not* symmetric — see §6.3. Catalog resource
-selection there uses `CatalogEntryUtils.matchesDicomDescriptor`
-which does a case-insensitive `contains` on the label / format /
-content descriptor, so labels like `DICOM_ORIG` (which the SQL
-excludes) are counted as retrievable. This is a known asymmetry
-between C-FIND file counts and what C-GET actually returns.
+`format` and `content` belong to `xnat:resource` (`xnat.xsd`), so
+they live in `xnat_resource`, joined `LEFT` on
+`xnat_abstractresource_id` (core XNAT joins it the same way, e.g.
+`ResourceSurveyXftItemEventHandlerMethod`). `CONCAT_WS` skips NULLs,
+and the space separator cannot create a false match because neither
+keyword contains a space.
+
+- STUDY: `sql/search-studies.sql:35`, in the `scan_file_counts`
+  CTE (`:24-37`), already limited to the project's sessions.
+- SERIES: `sql/search-series.sql:21`, in a `LATERAL` sub-query
+  (`:14-22`) correlated with `sc.xnat_imagescandata_id`.
+- PATIENT: `sql/search-patients.sql:44`, in a `LATERAL` sub-query
+  (`:37-45`) per scan.
+
+`everyCountUsesTheCGetResourceRule` in `DimseDataAccessTest` checks
+that all three files contain the predicate verbatim.
+
+> **Regression hazard.** If `CatalogEntryUtils.isDicomResource`
+> changes, change the SQL predicate in all three files and
+> `DICOM_RESOURCE_RULE` in the test together; otherwise C-FIND
+> counts and C-GET disagree about which resources hold instances.
+> Do not count files with an uncorrelated aggregate over
+> `xnat_abstractresource`: that reads every resource on the site
+> for each query.
+
+Remaining differences between counts and what C-GET sends:
+
+- C-GET also requires the resource to be a catalog resource
+  (`CatalogEntryUtils.java:43-47`); the SQL counts any matching
+  resource. Scan DICOM resources are catalogs in practice.
+- Counts sum `ar.file_count`, every file in the resource; C-GET
+  sends only the catalog's DICOM entries (`CatDcmentryBean`,
+  `:70-72`) and skips files it cannot read (§6.3).
+
+The unit tests check this SQL only as text; they do not execute it.
 
 ---
 
@@ -854,15 +884,14 @@ consequences of the code paths already annotated above:
 4. C-FIND / C-GET attribute mismatch — §5.7.
 5. No Specific Character Set — not exercised anywhere; strings
    are handled as Java `String` throughout.
-6. PATIENT-level counts — `sql/search-patients.sql:24-45`.
+6. PATIENT-level counts — `sql/search-patients.sql:24-54`.
 7. No partial retrieval by query level — `scp/XnatCGetScp.java`
    does not read `QueryRetrieveLevel` before applying key
    filters (the value is only logged, at `:78-80`).
-8. File count vs UI — see §5.10 and §6.3 for the two rules that
-   disagree.
+8. File count vs UI — see §5.10.
 9. Shared sessions — union in `sql/search-studies.sql:5-15`;
    subject-label subquery joins both `xnat_subjectdata` and
-   `xnat_projectparticipant` at `sql/search-studies.sql:69-79`.
+   `xnat_projectparticipant` at `sql/search-studies.sql:72-82`.
 
 ---
 
