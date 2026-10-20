@@ -5,6 +5,8 @@ import org.apache.commons.lang.StringUtils;
 import org.dcm4che3.data.Attributes;
 import org.dcm4che3.data.Tag;
 import org.dcm4che3.data.VR;
+import org.dcm4che3.net.Status;
+import org.dcm4che3.net.service.DicomServiceException;
 import org.nrg.xdat.bean.CatDcmentryBean;
 import org.nrg.xdat.model.CatEntryMetafieldI;
 import org.nrg.xdat.om.XnatImagesessiondata;
@@ -14,9 +16,11 @@ import org.nrg.xft.security.UserI;
 import org.nrg.xnat.dimse.query.DicomMatchUtils;
 import org.nrg.xnat.dimse.query.DicomQueryService;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.DataAccessException;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
+import java.util.function.Supplier;
 import java.util.stream.Stream;
 
 /**
@@ -49,17 +53,13 @@ public class XnatDicomQueryService implements DicomQueryService {
     @Override
     public Stream<Attributes> findStudies(final XnatProjectdata project,
                                           final Attributes keys,
-                                          final UserI user) {
+                                          final UserI user)
+            throws DicomServiceException {
         final String projectId = project.getId();
         log.debug("Querying studies in project '{}' with keys: {}", projectId, keys);
 
-        try {
-            return _dataAccess.searchStudies(projectId, keys)
-                    .filter(DicomMatchUtils.matchesQuery(keys));
-        } catch (final Exception e) {
-            log.error("Error querying studies in project '{}'", projectId, e);
-            return Stream.empty();
-        }
+        return query("studies", projectId, () -> _dataAccess.searchStudies(projectId, keys))
+                .filter(DicomMatchUtils.matchesQuery(keys));
     }
 
     /**
@@ -68,7 +68,8 @@ public class XnatDicomQueryService implements DicomQueryService {
     @Override
     public Stream<Attributes> findSeries(final XnatProjectdata project,
                                          final Attributes keys,
-                                         final UserI user) {
+                                         final UserI user)
+            throws DicomServiceException {
         final String projectId = project.getId();
         final String studyUid = keys.getString(Tag.StudyInstanceUID);
         if (StringUtils.isBlank(studyUid)) {
@@ -78,13 +79,8 @@ public class XnatDicomQueryService implements DicomQueryService {
 
         log.debug("Querying series in project '{}', study UID '{}'", projectId, studyUid);
 
-        try {
-            return _dataAccess.searchSeries(projectId, studyUid, keys)
-                    .filter(DicomMatchUtils.matchesQuery(keys));
-        } catch (final Exception e) {
-            log.error("Error querying series in project '{}'", projectId, e);
-            return Stream.empty();
-        }
+        return query("series", projectId, () -> _dataAccess.searchSeries(projectId, studyUid, keys))
+                .filter(DicomMatchUtils.matchesQuery(keys));
     }
 
     /**
@@ -93,17 +89,13 @@ public class XnatDicomQueryService implements DicomQueryService {
     @Override
     public Stream<Attributes> findPatients(final XnatProjectdata project,
                                            final Attributes keys,
-                                           final UserI user) {
+                                           final UserI user)
+            throws DicomServiceException {
         final String projectId = project.getId();
         log.debug("Querying patients in project '{}'", projectId);
 
-        try {
-            return _dataAccess.searchPatients(projectId, keys)
-                    .filter(DicomMatchUtils.matchesQuery(keys));
-        } catch (final Exception e) {
-            log.error("Error querying patients in project '{}'", projectId, e);
-            return Stream.empty();
-        }
+        return query("patients", projectId, () -> _dataAccess.searchPatients(projectId, keys))
+                .filter(DicomMatchUtils.matchesQuery(keys));
     }
 
     /**
@@ -113,11 +105,16 @@ public class XnatDicomQueryService implements DicomQueryService {
      * (SOP Instance UID, SOP Class UID, Instance Number) since these
      * are not stored in database tables. The session ORM is loaded to
      * access catalog entries via {@link CatalogEntryUtils}.</p>
+     *
+     * <p>Exception to the interface's failure contract: the session
+     * lookup goes through XFT, which logs a failed query and returns no
+     * sessions, so such a failure reads as no matches.</p>
      */
     @Override
     public Stream<Attributes> findInstances(final XnatProjectdata project,
                                             final Attributes keys,
-                                            final UserI user) {
+                                            final UserI user)
+            throws DicomServiceException {
         final String projectId = project.getId();
         final String studyUid = keys.getString(Tag.StudyInstanceUID);
         final String seriesUid = keys.getString(Tag.SeriesInstanceUID);
@@ -137,6 +134,8 @@ public class XnatDicomQueryService implements DicomQueryService {
                 XnatImagesessiondata.getXnatImagesessiondatasByField(
                         "xnat:imageSessionData/UID", studyUid, user, false);
 
+        // XFT logs and swallows a failed lookup, returning no sessions, so a
+        // database error here cannot be reported as a failure.
         // Owned-or-shared scope, matching the STUDY and SERIES SQL. Catalogs
         // resolve against the owning project, where the files live.
         return sessions.stream()
@@ -146,6 +145,32 @@ public class XnatDicomQueryService implements DicomQueryService {
                         .flatMap(scan -> CatalogEntryUtils.scanEntries(scan, session.getProject())))
                 .map(entry -> catalogEntryToAttributes(entry, studyUid, seriesUid, keys))
                 .filter(DicomMatchUtils.matchesQuery(keys));
+    }
+
+    /**
+     * Runs a database query, reporting a failure as C000H Unable to
+     * Process rather than as no matches. The cause is logged, not put in
+     * the Error Comment, which the SCU can read.
+     *
+     * @param what      what is being queried, for the log
+     * @param projectId the project searched, for the log
+     * @param query     the query; the SQL runs when this is called
+     * @return the query's rows
+     * @throws DicomServiceException with status C000H if the query fails
+     */
+    private static Stream<Attributes> query(final String what,
+                                            final String projectId,
+                                            final Supplier<Stream<Attributes>> query)
+            throws DicomServiceException {
+        try {
+            return query.get();
+        } catch (final DataAccessException e) {
+            log.error("Error querying {} in project '{}'", what, projectId, e);
+            final DicomServiceException failure =
+                    new DicomServiceException(Status.UnableToProcess, "Query failed");
+            failure.initCause(e);
+            throw failure;
+        }
     }
 
     /**

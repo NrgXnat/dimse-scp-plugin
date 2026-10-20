@@ -14,15 +14,20 @@ import org.nrg.xft.security.UserI;
 import org.nrg.xnat.dimse.query.DicomQueryService;
 import org.junit.Before;
 import org.junit.Test;
+import org.mockito.ArgumentCaptor;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.stream.Stream;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.fail;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -136,7 +141,7 @@ public class XnatCFindScpTest {
     }
 
     @Test
-    public void studyUidListAboveSeriesLevelIsRejected() {
+    public void studyUidListAboveSeriesLevelIsRejected() throws DicomServiceException {
         final Attributes keys = keysWithLevel("SERIES");
         keys.setString(Tag.StudyInstanceUID, VR.UI, "1.2.3", "4.5.6");
         try {
@@ -149,7 +154,7 @@ public class XnatCFindScpTest {
     }
 
     @Test
-    public void malformedStudyDateIsRejected() {
+    public void malformedStudyDateIsRejected() throws DicomServiceException {
         final Attributes keys = keysWithLevel("STUDY");
         keys.setString(Tag.StudyDate, VR.DA, "202001");
         try {
@@ -159,6 +164,52 @@ public class XnatCFindScpTest {
             assertEquals(Status.UnableToProcess, e.getStatus());
         }
         verify(queryService, never()).findStudies(any(), any(), any());
+    }
+
+    @Test
+    public void queryFailureIsPassedOn() throws DicomServiceException {
+        final DicomServiceException failure =
+                new DicomServiceException(Status.UnableToProcess, "Query failed");
+        when(queryService.findStudies(eq(project), any(), eq(user))).thenThrow(failure);
+        try {
+            scp.calculateMatches(association, pc, rq, keysWithLevel("STUDY"));
+            fail("expected DicomServiceException");
+        } catch (final DicomServiceException e) {
+            assertSame(failure, e);
+        }
+    }
+
+    @Test
+    public void unexpectedFailureIsUnableToProcess() throws DicomServiceException {
+        when(queryService.findStudies(eq(project), any(), eq(user)))
+                .thenThrow(new IllegalStateException("bug detail"));
+        try {
+            scp.calculateMatches(association, pc, rq, keysWithLevel("STUDY"));
+            fail("expected DicomServiceException");
+        } catch (final DicomServiceException e) {
+            assertEquals(Status.UnableToProcess, e.getStatus());
+            // The cause is logged, not sent to the SCU.
+            assertFalse(e.getMessage().contains("bug detail"));
+        }
+    }
+
+    @Test
+    public void unexpectedFailureWhileIteratingIsUnableToProcess() throws Exception {
+        final Attributes first = new Attributes();
+        first.setString(Tag.StudyInstanceUID, VR.UI, "1.2.3");
+        when(queryService.findStudies(eq(project), any(), eq(user)))
+                .thenReturn(Stream.concat(Stream.of(first), Stream.generate(() -> {
+                    throw new IllegalStateException("bug detail");
+                })));
+
+        scp.calculateMatches(association, pc, rq, keysWithLevel("STUDY")).run();
+
+        final ArgumentCaptor<Attributes> cmd = ArgumentCaptor.forClass(Attributes.class);
+        verify(association, atLeastOnce()).writeDimseRSP(eq(pc), cmd.capture(), any());
+        final List<Attributes> rsps = cmd.getAllValues();
+        assertEquals(2, rsps.size());
+        assertEquals(Status.Pending, rsps.get(0).getInt(Tag.Status, -1));
+        assertEquals(Status.UnableToProcess, rsps.get(1).getInt(Tag.Status, -1));
     }
 
     private static Attributes keysWithLevel(final String level) {

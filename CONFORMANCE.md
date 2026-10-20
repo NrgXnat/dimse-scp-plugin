@@ -494,7 +494,16 @@ C000H is returned for an unknown Called AE Title, when a
 Unique Key above the Query/Retrieve level holds more than one
 value, and when a Date or Time key value is malformed (see 5.5);
 in the latter two cases the response includes Offending Element
-(0000,0901) and an Error Comment. A900H is
+(0000,0901) and an Error Comment. C000H is also returned when the
+query cannot be completed, for example because of a database error;
+the Error Comment is "Query failed" and does not describe the cause.
+A database error at PATIENT, STUDY or SERIES level is reported before
+any match is returned. An internal error while matches are being
+returned also ends the query with C000H, possibly after Pending
+responses; the matches received are then incomplete. At IMAGE level,
+a failure to look up the study, or to read a series' resource
+catalog, is logged and reads as fewer or no matches rather
+than as C000H. A900H is
 returned when the Query/Retrieve Level is missing or
 unsupported.
 

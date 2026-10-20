@@ -153,7 +153,7 @@ The C-FIND SCP is a thin dispatcher; per-level logic is in
 
 ### 5.1 Query Levels
 
-Dispatch: `scp/XnatCFindScp.java:78-94`.
+Dispatch: `scp/XnatCFindScp.java:113-130`.
 `QueryLevel` enum: `query/QueryLevel.java:16-20`; each constant
 carries its level's Unique Key tag (`getUniqueKey`, `:33-35`).
 
@@ -291,7 +291,7 @@ study's resources (§5.10).
 `Modality` is passed through `dicomModality` (see §5.9).
 
 The dispatcher rejects a missing Study Instance UID before
-calling the DAO: `query/impl/XnatDicomQueryService.java:73-77`.
+calling the DAO: `query/impl/XnatDicomQueryService.java:75-78`.
 
 #### 5.3.4 IMAGE Level
 
@@ -302,8 +302,8 @@ than by SQL:
 
 - Dispatcher and requirements check:
   `query/impl/XnatDicomQueryService.findInstances`
-  (`query/impl/XnatDicomQueryService.java:117-149`).
-- Session lookup by Study UID: `:136-138` (still uses XFT ORM).
+  (`query/impl/XnatDicomQueryService.java:114-148`).
+- Session lookup by Study UID: `:133-135` (still uses XFT ORM).
 - Project scope: `session.hasProject(projectId)` (`:143`) — the
   XNAT core owned-or-shared rule
   (`BaseXnatExperimentdata.hasProject`), consistent with the
@@ -328,7 +328,7 @@ tags and adds a `setNull` for any tag not already present in the
 result, using the VR from the query (or `LO` as fallback). Called
 from every row mapper (`:162`, `:194`, `:232`) and from
 `XnatDicomQueryService.catalogEntryToAttributes`
-(`query/impl/XnatDicomQueryService.java:170`).
+(`query/impl/XnatDicomQueryService.java:195`).
 
 **Why empty and not a placeholder.** The zero-length values
 produced here (and the always-empty Referring Physician Name, the
@@ -501,7 +501,7 @@ so the filters restrict rows rather than attaching to a
 
 Note the two-layer arrangement: even for SQL-pushed keys, the
 Java `matchesQuery` filter runs afterwards
-(`query/impl/XnatDicomQueryService.java:58, 83, 102`). Both
+(`query/impl/XnatDicomQueryService.java:62, 83, 98`). Both
 layers now match case-insensitively, so the Java pass re-checks
 non-pushed keys and the VR-specific semantics SQL does not model
 (date/time ranges, UID lists) rather than correcting case.
@@ -518,8 +518,37 @@ non-pushed keys and the VR-specific semantics SQL does not model
   `query/QueryLevel.java:63-70` (§5.2).
 - `Status.UnableToProcess` (C000H) with Offending Element on a
   malformed DA or TM value: `query/DateTimeKeys.java:68-71` (§5.2).
+- `Status.UnableToProcess` (C000H) when a database query fails.
+  The `DicomQueryService.find*` methods declare
+  `DicomServiceException` (contract in the interface's class
+  Javadoc). `XnatDicomQueryService.query`
+  (`query/impl/XnatDicomQueryService.java:161-174`) runs each SQL
+  search and turns a Spring `DataAccessException` into C000H with a
+  fixed Error Comment "Query failed", logging the cause at ERROR;
+  the cause is not sent to the SCU. The SQL runs eagerly
+  (`NamedParameterJdbcTemplate.query` returns a `List`), so the
+  failure surfaces inside `find*`, before any Pending response. The
+  SCP passes it on unchanged (`scp/XnatCFindScp.java:80`).
+  - Safety net for bugs: any `RuntimeException` from the `find` call
+    (`scp/XnatCFindScp.java:79-83`) or from iterating its stream
+    (`hasMoreMatches` `:90-94`, `nextMatch` `:104-108`) becomes C000H
+    via `queryFailed` (`:141-149`). Needed because dcm4che's
+    `BasicQueryTask.run` sends a `DicomServiceException` as the final
+    response but sends **no** final response for any other exception.
+    An exception while iterating can follow Pending responses.
+  - Gap: the IMAGE-level session lookup
+    (`XnatImagesessiondata.getXnatImagesessiondatasByField`,
+    `query/impl/XnatDicomQueryService.java:133-135`) catches every
+    exception inside XFT, logs it, and returns an empty list, so a
+    database failure there reads as no matches. A catalog that fails
+    to load is likewise logged and skipped (`CatalogEntryUtils`).
+    Moving session resolution to SQL would close the first.
+  - Tests: `queryFailureIsPassedOn`,
+    `unexpectedFailureIsUnableToProcess`,
+    `unexpectedFailureWhileIteratingIsUnableToProcess` in
+    `XnatCFindScpTest`; `XnatDicomQueryServiceTest`.
 - `Status.IdentifierDoesNotMatchSOPClass` (A900H) on bad level:
-  `scp/XnatCFindScp.java:91-93` and
+  `scp/XnatCFindScp.java:126-128` and
   `query/QueryLevel.java:82-85, :89-92`.
 
 ### 5.7 Non-standard Attribute Mappings
@@ -792,7 +821,9 @@ SLF4J only. `@Slf4j` classes:
 - `scp/DimseScpService.java:35` — start / stop at INFO
   (`:245, :275`).
 - `scp/XnatCFindScp.java:30` — request logging at DEBUG
-  (`:59, :73, :103`), reject at WARN (`:66`).
+  (`:60, :75, :96`), reject at WARN (`:68`), unexpected failure at
+  ERROR (`:144`). Database query failures are logged at ERROR in
+  `query/impl/XnatDicomQueryService.java:168`.
 - `scp/XnatCGetScp.java:51` — DEBUG on request / transcoding
   (`:80, :89, :102`), WARN on missing negotiation (`:263-264`).
 - `scp/ProjectAeResolver.java:25` — DEBUG on resolution
