@@ -148,6 +148,19 @@ public class XnatCFindScpTest {
         verify(queryService, never()).findSeries(any(), any(), any());
     }
 
+    @Test
+    public void malformedStudyDateIsRejected() {
+        final Attributes keys = keysWithLevel("STUDY");
+        keys.setString(Tag.StudyDate, VR.DA, "202001");
+        try {
+            scp.calculateMatches(association, pc, rq, keys);
+            fail("expected DicomServiceException");
+        } catch (final DicomServiceException e) {
+            assertEquals(Status.UnableToProcess, e.getStatus());
+        }
+        verify(queryService, never()).findStudies(any(), any(), any());
+    }
+
     private static Attributes keysWithLevel(final String level) {
         final Attributes keys = new Attributes();
         keys.setString(Tag.QueryRetrieveLevel, VR.CS, level);

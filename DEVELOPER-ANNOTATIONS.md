@@ -74,7 +74,7 @@ Called-AE-Title-to-project resolution: `scp/ProjectAeResolver.java:60-80`.
 Rejection paths:
 
 - Unknown AE → `DicomServiceException(Status.UnableToProcess)`
-  from the calling SCP (`scp/XnatCFindScp.java:64-69`,
+  from the calling SCP (`scp/XnatCFindScp.java:66-71`,
   `scp/XnatCGetScp.java:83-87`).
 
 ### 2.3 Sequencing Constraints
@@ -103,7 +103,7 @@ Wildcard AE registration: `scp/DimseScpService.java:223`
 
 At request time, the SCPs read the Called AE Title from the
 association and resolve it:
-- C-FIND: `scp/XnatCFindScp.java:57` + `:64-69`.
+- C-FIND: `scp/XnatCFindScp.java:58` + `:66-71`.
 - C-GET: `scp/XnatCGetScp.java:76` + `:83-87`.
 
 The 16-character AE title limit is a DICOM protocol constraint
@@ -113,7 +113,7 @@ characters are simply unaddressable.
 
 ### 3.3 Calling AE Title Handling
 
-Logged but not otherwise used: `scp/XnatCFindScp.java:58-59`,
+Logged but not otherwise used: `scp/XnatCFindScp.java:59-60`,
 `scp/XnatCGetScp.java:77`. No validation code path exists.
 
 ### 3.4 Presentation Contexts — SCP Role
@@ -153,7 +153,7 @@ The C-FIND SCP is a thin dispatcher; per-level logic is in
 
 ### 5.1 Query Levels
 
-Dispatch: `scp/XnatCFindScp.java:76-92`.
+Dispatch: `scp/XnatCFindScp.java:78-94`.
 `QueryLevel` enum: `query/QueryLevel.java:16-20`; each constant
 carries its level's Unique Key tag (`getUniqueKey`, `:33-35`).
 
@@ -169,7 +169,7 @@ carries its level's Unique Key tag (`getUniqueKey`, `:33-35`).
 
 Then `QueryLevel.requireSingleUidKeysAbove`
 (`query/QueryLevel.java:55-71`, called at
-`scp/XnatCFindScp.java:62`) rejects any Identifier whose UID Unique
+`scp/XnatCFindScp.java:63`) rejects any Identifier whose UID Unique
 Key for a level *above* the query level (Study Instance UID at
 SERIES/IMAGE, Series Instance UID at IMAGE) has more than one
 value. PS3.4 C.4.1.2.1 requires a single value there; only the key
@@ -186,6 +186,39 @@ the same values would be legal at a lower level — so "Data Set does
 not match SOP Class" would mislead. Table C.4-1 lists Offending
 Element as a related field of Cxxx. Keep the message under 64
 characters; dcm4che truncates the LO Error Comment.
+
+Next, `DateTimeKeys.requireValid` (`query/DateTimeKeys.java:63-73`,
+called at `scp/XnatCFindScp.java:64`) rejects a malformed value in
+any DA or TM key, the same way: C000H, Offending Element naming the
+key, Error Comment "`<Keyword>` is not a valid DA/TM query value".
+`findMalformed` (`:81-86`) checks every top-level key, not only
+documented matching keys, because `matchesQuery` post-filters on
+every key with a value. Each non-empty value of a multi-valued key
+must pass; zero-length values are universal and not checked.
+
+- DA: `DicomMatchUtils.parseDateRange` must succeed (§5.5).
+- TM: `isValidTimeQueryValue` (`:115-128`). Each bound must match
+  `TIME` (`:46-47`), `HH[MM[SS[.F{1,6}]]]` (PS3.5 Table 6.2-1); a
+  range needs at least one bound, and its bounds
+  are compared after `fullPrecision` (`:145-151`) pads them to
+  `HHMMSS.FFFFFF`, so `1030-10` is reversed but `10-1030` is not.
+- TM leap seconds: PS3.5 allows SS = 60 "only for a leap second".
+  `TIME` accepts it at any hour but only in minute 59 (`HH5960`),
+  because leap seconds fall at 23:59:60 UTC and a whole-hour offset
+  shifts only the hour. This is the rule the XNAT DICOMweb plugin
+  uses (its CONFORMANCE §0.12); keep the two in step. Not handled:
+  fractional-hour zones (`HH:29:60` at +05:30, `HH:44:60` at
+  +05:45 / +12:45) are rejected, and the queried date is not
+  checked against the leap-second table. No stored time has
+  second 60 (`xs:time`), so in matching a `235960` upper bound
+  covers second 59 and a lower bound or exact value matches
+  nothing (`leapSecondBoundAgainstStoredTimes`).
+- Rejected for both: wildcards (C.2.2.2.4 does not list DA or TM),
+  including a lone `*`; a lone `-`; reversed ranges (C.2.2.2.5
+  requires `<v1>` ≤ `<v2>`); and `""`, which means Empty Value
+  Matching only after Extended Negotiation (C.2.2.2.7).
+- dcm4che strips the trailing SPACE padding PS3.5 allows before
+  the values reach the check (`trailingSpaceIsAccepted`).
 
 ### 5.3 Matching Keys and Return Keys
 
@@ -289,7 +322,7 @@ than by SQL:
 ### 5.4 Return Key Handling
 
 `DimseDataAccess.copyReturnKeys` at
-`query/impl/DimseDataAccess.java:540-547`: iterates the query
+`query/impl/DimseDataAccess.java:526-533`: iterates the query
 tags and adds a `setNull` for any tag not already present in the
 result, using the VR from the query (or `LO` as fallback). Called
 from every row mapper (`:162`, `:194`, `:232`) and from
@@ -340,7 +373,7 @@ Matching happens on two sides: indexed keys are pushed to SQL by
   and requires every remaining key to match. Every key is read with
   `getStrings`, so all query values are used: UI-VR keys go to
   `matchesUidList`, every other VR to `matchesAnyValue`.
-- `matchesUidList` (`:247-259`) implements List of UID Matching
+- `matchesUidList` (`:253-265`) implements List of UID Matching
   (PS3.4 C.2.2.2.2): the candidate matches if any of its values
   exactly equals any query UID; an absent or
   all-empty query is universal. dcm4che has already split the
@@ -360,26 +393,43 @@ Matching happens on two sides: indexed keys are pushed to SQL by
   zero-length values; if none remain, or any value is a lone `*`,
   the key is universal and matches even an absent candidate
   (`:79-81`).
-- `matchesValue` (`:115-139`) dispatches by VR:
+- `matchesValue` (`:115-145`) dispatches by VR:
   - Empty query value, or one made only of `*` (checked by
-    `isUniversalWildcard`, `:163-165`) → universal match
+    `isUniversalWildcard`, `:169-171`) → universal match
     (`:118-120`). PS3.4 C.2.2.2.4: `*` matches any sequence
     including a zero-length value, so a lone `*` must also match
     empty and absent values; it is tested before the
-    empty-candidate rejection below.
+    empty-candidate rejection below. A lone `*` never reaches
+    here for DA or TM keys: `DateTimeKeys` rejects it (§5.2).
   - Empty candidate against any other non-empty query → no match
     (`:121-123`).
   - `VR.UI` → exact single-UID comparison
     (`:125-127`); `matchesQuery` never reaches this for UI keys,
     which use `matchesUidList`.
-  - `VR.DA` / `VR.DT` / `VR.TM` → `matchesDateRange` when
-    a `-` is present (`:128-132`, `:224-233`).
-  - Wildcards → `matchesWildcard` (`:133-135`, `:182-186`) via a
-    regex from `wildcardToRegex` (`:194-217`), compiled with
+  - `VR.DA` → `parseDateRange(...).contains` (`:128-133`), exact
+    dates included. A malformed value throws
+    `IllegalArgumentException`: it can only arrive if a caller
+    skipped `DateTimeKeys.requireValid`.
+  - `VR.DT` / `VR.TM` → `matchesDateRange` (string comparison)
+    when a `-` is present (`:134-138`, `:230-239`). TM values are
+    validated (§5.2) but still matched as strings, so an exact TM
+    query of lower precision than the stored value (`10` against
+    `103000`) does not match. Study Time, the only TM key in the
+    conformance tables, is not listed as a matching key.
+  - Wildcards → `matchesWildcard` (`:139-141`, `:188-192`) via a
+    regex from `wildcardToRegex` (`:200-223`), compiled with
     `CASE_INSENSITIVE`.
   - Otherwise a case-insensitive exact match
-    (`equalsIgnoreCase`, `:136-138`) — for every VR, not only PN
+    (`equalsIgnoreCase`, `:142-144`) — for every VR, not only PN
     (R4).
+- `parseDateRange` (`:341-358`) is the single definition of a valid
+  DA query value, used by `DateTimeKeys` and by both matching
+  layers. It returns a `DateRange` record (`:313-326`) of lower
+  and upper `YYYYMMDD` bounds, at least one present (an exact date
+  has equal bounds), and an `exact` flag; or empty if a bound fails
+  `isValidDicomDate` (`:368-378`), no bound is given, or the range
+  is reversed. `contains` compares a candidate with each present
+  bound as a string, which orders correctly for `YYYYMMDD`.
 
 **SQL side** — `query/impl/DimseDataAccess.java`. Filters are
 appended as ` AND …` by `buildStudyQuery` (`:82-88`),
@@ -401,7 +451,7 @@ so the filters restrict rows rather than attaching to a
 - `addStringFilter` — `:307-315` (by tag) passes all non-empty
   values to the list overload `:326-344`, which emits
   `ILIKE :param` per value with the value routed through
-  `DicomMatchUtils.toSqlLike` (`:269-292`) (R4). A value with no
+  `DicomMatchUtils.toSqlLike` (`:275-298`) (R4). A value with no
   wildcards is a case-insensitive exact match; the overload lets
   `addSeriesFilters` pass the reverse-mapped Modality values. If
   any value is made only of `*`, no predicate is added
@@ -409,21 +459,21 @@ so the filters restrict rows rather than attaching to a
   NULL (for example `psl.subject_label`), contradicting universal
   matching.
 - `addDateFilter` (`:352-362`): one predicate per value, from
-  `datePredicate` (`:374-404`; range or exact) and `dateBound`
-  (`:411-428`). Each bound is validated with
-  `DicomMatchUtils.isValidDicomDate` (strict `uuuuMMdd` via
-  `LocalDate`); a malformed bound is skipped and logged (so an
-  out-of-range value like `20160732` cannot crash the query), and
-  a value with no valid bound restricts nothing. Valid bounds are
-  converted to `YYYY-MM-DD` (`dicomDateToIso`, `:326-333` in
-  `DicomMatchUtils`) and compared as `CAST(:param AS DATE)` so the
-  `date` column is not compared against a bound string.
+  `datePredicate` (`:378-400`), which takes its bounds from
+  `DicomMatchUtils.parseDateRange` so the post-filter applies the
+  same constraint. Values are already valid (§5.2); a malformed
+  one throws `IllegalArgumentException`.
+  An exact date becomes `=`, a range `>=` / `<=`. `dateComparison`
+  (`:407-414`) converts each bound to `YYYY-MM-DD`
+  (`dicomDateToIso`, `:388-395` in `DicomMatchUtils`) and compares
+  as `CAST(:param AS DATE)` so the `date` column is not compared
+  against a bound string.
 - Multi-valued keys: both filters hand their per-value predicates
-  to `appendAnyOf` (`:445-457`). One predicate is appended as is,
+  to `appendAnyOf` (`:431-443`). One predicate is appended as is,
   with the plain parameter names (`:name`, `:dateStart`); several
   are parenthesized and ORed, with an index suffix on each name
-  (`indexSuffix`, `:463-465`; `:modality0`, `:modality1`). If any
-  value restricts nothing (a lone `*`, an invalid date), the whole
+  (`indexSuffix`, `:449-451`; `:modality0`, `:modality1`). If any
+  value restricts nothing (a lone `*` in a string key), the whole
   key is universal and nothing is appended.
 
 > **Regression hazard.** The SQL push-down must return a superset
@@ -434,6 +484,19 @@ so the filters restrict rows rather than attaching to a
 > `seriesQueryMapsEachModalityValue` and `dateFilterMultipleValuesOred`
 > in `DimseDataAccessTest`, and the `multiValuedQuery*` cases in
 > `DicomMatchUtilsTest`.
+
+> **Regression hazard.** Neither matching layer may skip a bad
+> bound or treat a malformed DA value as universal: if one layer
+> did, the two layers could disagree, and the SCU would get results
+> for a query other than the one it sent. Validation belongs in
+> `DateTimeKeys.requireValid`, before the query runs; the layers
+> parse only through `DicomMatchUtils.parseDateRange` and throw on
+> anything it rejects. Covered by `DateTimeKeysTest`,
+> `parseDateRangeRejectsMalformed` and
+> `matchesValueThrowsOnUnvalidatedMalformedDate` in
+> `DicomMatchUtilsTest`, `dateFilterThrowsOnUnvalidatedMalformedDate`
+> in `DimseDataAccessTest`, and `malformedStudyDateIsRejected` in
+> `XnatCFindScpTest`.
 
 Note the two-layer arrangement: even for SQL-pushed keys, the
 Java `matchesQuery` filter runs afterwards
@@ -448,12 +511,14 @@ non-pushed keys and the VR-specific semantics SQL does not model
   `BasicCFindSCP` / `BasicQueryTask` — no code in this plugin
   writes them explicitly.
 - `Status.UnableToProcess` (C000H) on unknown AE:
-  `scp/XnatCFindScp.java:64-69`.
+  `scp/XnatCFindScp.java:66-71`.
 - `Status.UnableToProcess` (C000H) with Offending Element on a
   UID list in a Unique Key above the query level:
   `query/QueryLevel.java:63-70` (§5.2).
+- `Status.UnableToProcess` (C000H) with Offending Element on a
+  malformed DA or TM value: `query/DateTimeKeys.java:68-71` (§5.2).
 - `Status.IdentifierDoesNotMatchSOPClass` (A900H) on bad level:
-  `scp/XnatCFindScp.java:89-91` and
+  `scp/XnatCFindScp.java:91-93` and
   `query/QueryLevel.java:82-85, :89-92`.
 
 ### 5.7 Non-standard Attribute Mappings
@@ -482,13 +547,13 @@ translation layer:
   conformance statement described it as the session note.
 - **Referring Physician Name** = always empty — not set by the
   row mapper, so `copyReturnKeys`
-  (`query/impl/DimseDataAccess.java:540-547`) emits a zero-length
+  (`query/impl/DimseDataAccess.java:526-533`) emits a zero-length
   value if the SCU requested it.
 
 ### 5.8 Gender Mapping
 
 `query/impl/DimseDataAccess.genderToDicomSex`
-(`query/impl/DimseDataAccess.java:495-506`).
+(`query/impl/DimseDataAccess.java:481-492`).
 
 - Blank / null → `Optional.empty()` (not included in response).
 - `m` / `male` (case-insensitive) → `M`.
@@ -498,7 +563,7 @@ translation layer:
 ### 5.9 Modality Mapping
 
 - On the row-mapper side, `dicomModality`
-  (`query/impl/DimseDataAccess.java:511-521`) maps `PET` → `PT`
+  (`query/impl/DimseDataAccess.java:497-507`) maps `PET` → `PT`
   and truncates values longer than 16 characters. Used by
   `searchSeries` at `:189`.
 - On the SQL side (STUDY level aggregation), the same `PET`→`PT`
@@ -507,7 +572,7 @@ translation layer:
   CTE) before the values are `string_agg`ed and returned as the
   `modalities` column.
 - **Reverse mapping for matching (R3).** `dicomToXnatModality`
-  (`query/impl/DimseDataAccess.java:532-534`) maps a query value
+  (`query/impl/DimseDataAccess.java:518-520`) maps a query value
   of `PT` back to `PET`; `addSeriesFilters` (`:251-261`) applies
   it before building the SERIES `Modality` filter, so a query
   using the DICOM code `PT` matches scans whose XNAT modality is
@@ -669,7 +734,7 @@ Transcoding: `scp/XnatCGetScp.createDataWriter`
 No code path validates the Calling AE Title. Service-account
 identity is delegated to `XnatUserProvider` via
 `scp/ProjectAeResolver.java:49-51` and passed into query/retrieve
-methods (`scp/XnatCFindScp.java:71`,
+methods (`scp/XnatCFindScp.java:73`,
 `scp/XnatCGetScp.java:123`).
 
 ### 7.2 Authorization
@@ -696,7 +761,7 @@ only data boundary between projects.
 SLF4J only. `@Slf4j` classes:
 - `scp/DimseScpService.java:35` — start / stop at INFO
   (`:245, :275`).
-- `scp/XnatCFindScp.java:29` — request logging at DEBUG
+- `scp/XnatCFindScp.java:30` — request logging at DEBUG
   (`:59, :73, :103`), reject at WARN (`:66`).
 - `scp/XnatCGetScp.java:51` — DEBUG on request / transcoding
   (`:80, :89, :102`), WARN on missing negotiation (`:263-264`).

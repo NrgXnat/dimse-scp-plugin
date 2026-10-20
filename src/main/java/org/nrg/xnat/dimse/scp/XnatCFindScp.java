@@ -12,6 +12,7 @@ import org.dcm4che3.net.service.DicomServiceException;
 import org.dcm4che3.net.service.QueryTask;
 import org.nrg.xdat.om.XnatProjectdata;
 import org.nrg.xft.security.UserI;
+import org.nrg.xnat.dimse.query.DateTimeKeys;
 import org.nrg.xnat.dimse.query.DicomQueryService;
 import org.nrg.xnat.dimse.query.QueryLevel;
 
@@ -60,6 +61,7 @@ public class XnatCFindScp extends BasicCFindSCP {
         final QueryLevel level = QueryLevel.fromKeys(keys);
         log.trace("query level {}", level);
         level.requireSingleUidKeysAbove(keys);
+        DateTimeKeys.requireValid(keys);
 
         final XnatProjectdata project = _projectAeResolver.resolve(calledAet)
             .orElseThrow(() -> {

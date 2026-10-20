@@ -440,34 +440,15 @@ public class DimseDataAccessTest {
         assertEquals("2020-01-01", params.getValue("dateStart"));
     }
 
-    @Test
-    public void dateFilterInvalidExactDateSkipped() {
-        final StringBuilder sql = new StringBuilder("SELECT 1");
-        final MapSqlParameterSource params = new MapSqlParameterSource();
+    @Test(expected = IllegalArgumentException.class)
+    public void dateFilterThrowsOnUnvalidatedMalformedDate() {
+        // DateTimeKeys rejects malformed values before the query runs;
+        // reaching SQL with one is a programming error, not a no-op.
         final Attributes keys = new Attributes();
-        keys.setString(Tag.StudyDate, VR.DA, "20200732"); // no July 32
+        keys.setString(Tag.StudyDate, VR.DA, "20200615", "20200732");
 
-        newAccess().addDateFilter(sql, params, keys, Tag.StudyDate, "e.date");
-
-        // Invalid date is skipped rather than emitted (which would
-        // crash the query with an out-of-range date).
-        assertEquals("SELECT 1", sql.toString());
-        assertFalse(params.hasValue("dateExact"));
-    }
-
-    @Test
-    public void dateFilterInvalidRangeBoundSkipped() {
-        final StringBuilder sql = new StringBuilder("SELECT 1");
-        final MapSqlParameterSource params = new MapSqlParameterSource();
-        final Attributes keys = new Attributes();
-        keys.setString(Tag.StudyDate, VR.DA, "20050701-20160732"); // bad end
-
-        newAccess().addDateFilter(sql, params, keys, Tag.StudyDate, "e.date");
-
-        final String result = sql.toString();
-        assertTrue(result.contains("AND e.date >= CAST(:dateStart AS DATE)"));
-        assertEquals("2005-07-01", params.getValue("dateStart"));
-        assertFalse(result.contains("dateEnd"));
+        newAccess().addDateFilter(new StringBuilder("SELECT 1"),
+                new MapSqlParameterSource(), keys, Tag.StudyDate, "e.date");
     }
 
     @Test
@@ -485,20 +466,6 @@ public class DimseDataAccessTest {
         assertEquals("2020-06-15", params.getValue("dateExact0"));
         assertEquals("2021-01-01", params.getValue("dateStart1"));
         assertEquals("2021-01-31", params.getValue("dateEnd1"));
-    }
-
-    @Test
-    public void dateFilterMultipleValuesWithInvalidValueNoOp() {
-        // An invalid value restricts nothing, so the OR is universal.
-        final StringBuilder sql = new StringBuilder("SELECT 1");
-        final MapSqlParameterSource params = new MapSqlParameterSource();
-        final Attributes keys = new Attributes();
-        keys.setString(Tag.StudyDate, VR.DA, "20200615", "20200732");
-
-        newAccess().addDateFilter(sql, params, keys, Tag.StudyDate, "e.date");
-
-        assertEquals("SELECT 1", sql.toString());
-        assertFalse(params.hasValue("dateExact0"));
     }
 
     /**

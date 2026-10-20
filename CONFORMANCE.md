@@ -427,14 +427,31 @@ by the SCP are returned with zero length.
   attributes.
 - **Wildcard Matching:** `*` matches any sequence of
   characters, including none; `?` matches a single character.
-  Available for string VRs, and case-insensitive. A value of
+  Available for string VRs (not Date or Time, see below), and
+  case-insensitive. A value of
   `*` alone is equivalent to Universal Matching (PS3.4
   C.2.2.2.4): it also matches entities whose value for that
   attribute is empty.
 - **Date Range Matching:** Format `YYYYMMDD-YYYYMMDD`. Either
-  bound may be omitted for an open-ended range. A bound that is
-  not a valid calendar date is ignored (not applied as a
-  constraint).
+  bound, but not both, may be omitted for an open-ended range
+  (PS3.4 C.2.2.2.5).
+- **Date and Time values are validated.** Every non-empty value
+  of every Date (DA) or Time (TM) key in the Identifier must be
+  an exact value or a range, `<v1>-<v2>`, `-<v1>` or `<v1>-`,
+  with `<v1>` not later than `<v2>`. A Date must be `YYYYMMDD`
+  naming a real calendar date; a Time must be
+  `HH[MM[SS[.FFFFFF]]]` (PS3.5 Table 6.2-1), where seconds may
+  be `60` (a leap second) only in minute 59, at any hour:
+  `235960` and `115960` are accepted, `103060` is not. Leap
+  seconds are inserted at 23:59:60 UTC, which a whole-hour offset
+  from UTC renders in minute 59; a time zone with a fractional-hour
+  offset (for example +05:30, `HH:29:60`) cannot query its leap
+  second, and the date is not checked. Anything else is
+  rejected with status C000H, with Offending Element (0000,0901)
+  identifying the key: for example `202001`, `20201301-`,
+  `103060`, a reversed range, `-`, any wildcard including a lone `*`, and
+  `""` (Empty Value Matching is not supported). A zero-length
+  value is still Universal Matching.
 - **UID List Matching:** Backslash-separated UID values per
   PS3.4 C.2.2.2.2; an entity matches if its UID exactly equals
   any UID in the list. A list is accepted only in the Unique Key
@@ -473,10 +490,11 @@ by the SCP are returned with zero length.
 | Failure    | C000H | Unable to Process (e.g., unknown AE) |
 | Failure    | A900H | Identifier does not match SOP class  |
 
-C000H is returned for an unknown Called AE Title, and when a
+C000H is returned for an unknown Called AE Title, when a
 Unique Key above the Query/Retrieve level holds more than one
-value (see 5.5); in the latter case the response includes
-Offending Element (0000,0901) and an Error Comment. A900H is
+value, and when a Date or Time key value is malformed (see 5.5);
+in the latter two cases the response includes Offending Element
+(0000,0901) and an Error Comment. A900H is
 returned when the Query/Retrieve Level is missing or
 unsupported.
 

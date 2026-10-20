@@ -125,7 +125,13 @@ public final class DicomMatchUtils {
         if (vr == VR.UI) {
             return queryValue.equals(candidateValue); // exact
         }
-        if (vr == VR.DA || vr == VR.DT || vr == VR.TM) {
+        if (vr == VR.DA) {
+            return parseDateRange(queryValue)
+                    .orElseThrow(() -> new IllegalArgumentException(
+                            "Malformed DA query value: " + queryValue))
+                    .contains(candidateValue);
+        }
+        if (vr == VR.DT || vr == VR.TM) {
             if (isDateRange(queryValue)) {
                 return matchesDateRange(queryValue, candidateValue);
             }
@@ -294,6 +300,62 @@ public final class DicomMatchUtils {
     private static final DateTimeFormatter DICOM_DATE =
             DateTimeFormatter.ofPattern("uuuuMMdd")
                     .withResolverStyle(ResolverStyle.STRICT);
+
+    /**
+     * The constraint a valid DA query value places on a date: lower and
+     * upper bounds in {@code YYYYMMDD} form, at least one present. An
+     * exact date has equal bounds; an open-ended range lacks one.
+     *
+     * @param lower the inclusive lower bound, if any
+     * @param upper the inclusive upper bound, if any
+     * @param exact true if the value was a single date, not a range
+     */
+    public record DateRange(Optional<String> lower, Optional<String> upper,
+                            boolean exact) {
+        /**
+         * Tests whether a candidate DA value is within this range.
+         * {@code YYYYMMDD} values order correctly as strings.
+         *
+         * @param candidate the candidate's date value
+         * @return true if the candidate satisfies every present bound
+         */
+        public boolean contains(final String candidate) {
+            return lower.map(bound -> candidate.compareTo(bound) >= 0).orElse(true)
+                    && upper.map(bound -> candidate.compareTo(bound) <= 0).orElse(true);
+        }
+    }
+
+    /**
+     * Parses a DA query value: an exact date {@code YYYYMMDD}, or a
+     * range {@code start-end} where either bound, but not both, may be
+     * omitted (PS3.4 C.2.2.2.5). Every bound must be a valid calendar
+     * date ({@link #isValidDicomDate}) and the start must not be after
+     * the end. This is the single definition of a valid DA query value:
+     * {@link DateTimeKeys} rejects requests for which it is empty, and
+     * the SQL push-down ({@code DimseDataAccess.addDateFilter}) and the
+     * post-filter ({@link #matchesValue}) both match from its result.
+     *
+     * @param value a non-null DA query value
+     * @return the bounds, or empty if the value is malformed
+     */
+    public static Optional<DateRange> parseDateRange(final String value) {
+        if (!isDateRange(value)) {
+            return Optional.of(value)
+                    .filter(DicomMatchUtils::isValidDicomDate)
+                    .map(date -> new DateRange(Optional.of(date), Optional.of(date), true));
+        }
+        final int dash = value.indexOf('-');
+        final String start = value.substring(0, dash);
+        final String end = value.substring(dash + 1);
+        final boolean wellFormed = !(start.isEmpty() && end.isEmpty())
+                && (start.isEmpty() || isValidDicomDate(start))
+                && (end.isEmpty() || isValidDicomDate(end))
+                && (start.isEmpty() || end.isEmpty() || start.compareTo(end) <= 0);
+        return wellFormed
+                ? Optional.of(new DateRange(Optional.of(start).filter(StringUtils::isNotEmpty),
+                        Optional.of(end).filter(StringUtils::isNotEmpty), false))
+                : Optional.empty();
+    }
 
     /**
      * Tests whether a value is a valid DICOM DA date

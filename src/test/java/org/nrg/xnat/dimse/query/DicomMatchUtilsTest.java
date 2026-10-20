@@ -6,6 +6,7 @@ import org.dcm4che3.data.VR;
 import org.junit.Test;
 
 import java.util.Arrays;
+import java.util.Optional;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -196,6 +197,80 @@ public class DicomMatchUtilsTest {
                 Tag.StudyDate, VR.DA, "20200101-", "20250101"));
         assertFalse(DicomMatchUtils.matchesValue(
                 Tag.StudyDate, VR.DA, "20200101-", "20190101"));
+    }
+
+    // --- DA parsing (malformed values are rejected by DateTimeKeys) ---
+
+    @Test
+    public void exactDateMatchesOnlyThatDate() {
+        assertTrue(DicomMatchUtils.matchesValue(
+                Tag.StudyDate, VR.DA, "20200615", "20200615"));
+        assertFalse(DicomMatchUtils.matchesValue(
+                Tag.StudyDate, VR.DA, "20200615", "20200616"));
+    }
+
+    @Test
+    public void parseDateRangeBounds() {
+        final DicomMatchUtils.DateRange exact =
+                DicomMatchUtils.parseDateRange("20200615").orElseThrow();
+        assertEquals(Optional.of("20200615"), exact.lower());
+        assertEquals(Optional.of("20200615"), exact.upper());
+        assertTrue(exact.exact());
+
+        final DicomMatchUtils.DateRange openEnd =
+                DicomMatchUtils.parseDateRange("20200101-").orElseThrow();
+        assertEquals(Optional.of("20200101"), openEnd.lower());
+        assertEquals(Optional.empty(), openEnd.upper());
+        assertFalse(openEnd.exact());
+
+        final DicomMatchUtils.DateRange openStart =
+                DicomMatchUtils.parseDateRange("-20201231").orElseThrow();
+        assertEquals(Optional.empty(), openStart.lower());
+        assertEquals(Optional.of("20201231"), openStart.upper());
+
+        // equal bounds are a valid range
+        assertTrue(DicomMatchUtils.parseDateRange("20200101-20200101").isPresent());
+    }
+
+    @Test
+    public void parseDateRangeRejectsMalformed() {
+        for (final String value : Arrays.asList(
+                "202001",            // not YYYYMMDD
+                "20200732",          // no July 32
+                "20201301-",         // no month 13
+                "20050701-20160732", // one bad bound
+                "20201231-20200101", // reversed
+                "-",                 // no bound
+                "2020*",             // wildcard
+                "*",                 // lone wildcard
+                "2020-01-01",        // ISO, not DA
+                "2020.01.01",        // retired ACR-NEMA form
+                "\"\"")) {          // Empty Value Matching, not negotiated
+            assertFalse(value, DicomMatchUtils.parseDateRange(value).isPresent());
+        }
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void matchesValueThrowsOnUnvalidatedMalformedDate() {
+        DicomMatchUtils.matchesValue(Tag.StudyDate, VR.DA, "202001", "20200615");
+    }
+
+    @Test
+    public void timeRangesStillMatch() {
+        assertTrue(DicomMatchUtils.matchesValue(
+                Tag.StudyTime, VR.TM, "080000-120000", "093000"));
+        assertFalse(DicomMatchUtils.matchesValue(
+                Tag.StudyTime, VR.TM, "080000-120000", "130000"));
+    }
+
+    @Test
+    public void leapSecondBoundAgainstStoredTimes() {
+        // Stored times never have second 60 (xs:time), so as an upper
+        // bound 235960 covers second 59; as a lower bound it matches none.
+        assertTrue(DicomMatchUtils.matchesValue(
+                Tag.StudyTime, VR.TM, "-235960", "235959"));
+        assertFalse(DicomMatchUtils.matchesValue(
+                Tag.StudyTime, VR.TM, "235960-", "235959"));
     }
 
     // --- UID list matching ---

@@ -346,8 +346,8 @@ public class DimseDataAccess {
     /**
      * Adds a date-valued filter. Supports exact date, date ranges
      * (YYYYMMDD-YYYYMMDD), and open-ended ranges. A multi-valued key
-     * matches if any value matches. An invalid date or range bound
-     * places no restriction on the column.
+     * matches if any value matches. Values must already be valid (see
+     * {@link DicomMatchUtils#parseDateRange}).
      */
     void addDateFilter(final StringBuilder sql,
                                final MapSqlParameterSource params,
@@ -362,41 +362,37 @@ public class DimseDataAccess {
     }
 
     /**
-     * Builds the predicate for one DA query value.
+     * Builds the predicate for one DA query value, from the bounds
+     * {@link DicomMatchUtils#parseDateRange} finds, so the post-filter
+     * applies the same constraint. The value must already be valid:
+     * {@code DateTimeKeys.requireValid} rejects malformed values before
+     * the query runs.
      *
-     * @param value  a non-empty DA query value (exact date or range)
-     * @param tag    the DICOM tag, for logging
+     * @param value  a non-empty, valid DA query value (exact or range)
+     * @param tag    the DICOM tag, for the error message
      * @param column the SQL column
      * @param suffix appended to parameter names to keep them unique
-     * @return the predicate, or empty if the value places no
-     *         restriction (an invalid date, or a range with no valid bound)
+     * @return the predicate
+     * @throws IllegalArgumentException if the value is malformed
      */
     private static Optional<SqlPredicate> datePredicate(final String value,
                                                         final int tag,
                                                         final String column,
                                                         final String suffix) {
-        if (!DicomMatchUtils.isDateRange(value)) {
-            if (DicomMatchUtils.isValidDicomDate(value)) {
-                final String name = "dateExact" + suffix;
-                return Optional.of(new SqlPredicate(
-                        column + " = CAST(:" + name + " AS DATE)",
-                        Map.of(name, DicomMatchUtils.dicomDateToIso(value))));
-            }
-            log.warn("Ignoring invalid date '{}' for tag {}",
-                    value, Integer.toHexString(tag));
-            return Optional.empty();
+        final DicomMatchUtils.DateRange range = DicomMatchUtils.parseDateRange(value)
+                .orElseThrow(() -> new IllegalArgumentException("Malformed DA query value '"
+                        + value + "' for tag " + Integer.toHexString(tag)));
+        if (range.exact()) {
+            return Optional.of(dateComparison(column, "=", "dateExact" + suffix,
+                    range.lower().orElseThrow()));
         }
-        final int dash = value.indexOf('-');
         final List<SqlPredicate> bounds = Stream.of(
-                        dateBound(value.substring(0, dash), ">=", "dateStart" + suffix,
-                                "lower", tag, column),
-                        dateBound(value.substring(dash + 1), "<=", "dateEnd" + suffix,
-                                "upper", tag, column))
+                        range.lower().map(bound ->
+                                dateComparison(column, ">=", "dateStart" + suffix, bound)),
+                        range.upper().map(bound ->
+                                dateComparison(column, "<=", "dateEnd" + suffix, bound)))
                 .flatMap(Optional::stream)
                 .toList();
-        if (bounds.isEmpty()) {
-            return Optional.empty();
-        }
         return Optional.of(new SqlPredicate(
                 bounds.stream().map(SqlPredicate::sql).collect(Collectors.joining(" AND ")),
                 bounds.stream().flatMap(b -> b.params().entrySet().stream())
@@ -404,27 +400,17 @@ public class DimseDataAccess {
     }
 
     /**
-     * Builds the predicate for one bound of a DA range.
-     *
-     * @return the predicate, or empty if the bound is omitted or invalid
+     * Builds a comparison of a {@code date} column with a valid DA
+     * value, bound as an ISO date so the column is not compared
+     * against a string.
      */
-    private static Optional<SqlPredicate> dateBound(final String bound,
-                                                    final String operator,
-                                                    final String name,
-                                                    final String which,
-                                                    final int tag,
-                                                    final String column) {
-        if (bound.isEmpty()) {
-            return Optional.empty();
-        }
-        if (!DicomMatchUtils.isValidDicomDate(bound)) {
-            log.warn("Ignoring invalid {} date bound '{}' for tag {}",
-                    which, bound, Integer.toHexString(tag));
-            return Optional.empty();
-        }
-        return Optional.of(new SqlPredicate(
+    private static SqlPredicate dateComparison(final String column,
+                                               final String operator,
+                                               final String name,
+                                               final String dicomDate) {
+        return new SqlPredicate(
                 column + " " + operator + " CAST(:" + name + " AS DATE)",
-                Map.of(name, DicomMatchUtils.dicomDateToIso(bound))));
+                Map.of(name, DicomMatchUtils.dicomDateToIso(dicomDate)));
     }
 
     /**
