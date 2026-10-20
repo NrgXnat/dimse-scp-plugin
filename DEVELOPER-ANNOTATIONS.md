@@ -181,7 +181,7 @@ checked.
 
 The status is `UnableToProcess` (C000H) with Offending Element
 (0000,0901) set to the multi-valued tag and a short Error Comment
-(`:63-70`), not A900H: the Identifier is valid for the SOP Class —
+(`query/QueryLevel.java:63-70`), not A900H: the Identifier is valid for the SOP Class —
 the same values would be legal at a lower level — so "Data Set does
 not match SOP Class" would mislead. Table C.4-1 lists Offending
 Element as a related field of Cxxx. Keep the message under 64
@@ -191,13 +191,13 @@ Next, `DateTimeKeys.requireValid` (`query/DateTimeKeys.java:63-73`,
 called at `scp/XnatCFindScp.java:64`) rejects a malformed value in
 any DA or TM key, the same way: C000H, Offending Element naming the
 key, Error Comment "`<Keyword>` is not a valid DA/TM query value".
-`findMalformed` (`:81-86`) checks every top-level key, not only
+`findMalformed` (`query/DateTimeKeys.java:81-86`) checks every top-level key, not only
 documented matching keys, because `matchesQuery` post-filters on
 every key with a value. Each non-empty value of a multi-valued key
 must pass; zero-length values are universal and not checked.
 
 - DA: `DicomMatchUtils.parseDateRange` must succeed (§5.5).
-- TM: `isValidTimeQueryValue` (`:115-128`). Each bound must match
+- TM: `isValidTimeQueryValue` (`query/DateTimeKeys.java:115-128`). Each bound must match
   `TIME` (`:46-47`), `HH[MM[SS[.F{1,6}]]]` (PS3.5 Table 6.2-1); a
   range needs at least one bound, and its bounds
   are compared after `fullPrecision` (`:145-151`) pads them to
@@ -303,19 +303,20 @@ than by SQL:
 - Dispatcher and requirements check:
   `query/impl/XnatDicomQueryService.findInstances`
   (`query/impl/XnatDicomQueryService.java:114-148`).
-- Session lookup by Study UID: `:133-135` (still uses XFT ORM).
-- Project scope: `session.hasProject(projectId)` (`:143`) — the
+- Session lookup by Study UID: `:133-135` (through the XFT ORM, not
+  SQL).
+- Project scope: `session.hasProject(projectId)` (`:142`) — the
   XNAT core owned-or-shared rule
   (`BaseXnatExperimentdata.hasProject`), consistent with the
   STUDY/SERIES SQL, so every study listed at STUDY level can be
   queried at IMAGE level.
-- Scan enumeration and catalog walk: `:144-146`. Catalogs are
+- Scan enumeration and catalog walk: `:143-145`. Catalogs are
   resolved against the session's owning project
   (`session.getProject()`), not the Called-AE project.
 - Attribute assembly per catalog entry:
   `query/impl/XnatDicomQueryService.catalogEntryToAttributes`
-  (`:154-172`); SOP Class UID pulled from the
-  `SOP_Class_UID` metafield (`:177-183`).
+  (`:179-197`); SOP Class UID pulled from the
+  `SOP_Class_UID` metafield (`:202-208`).
 - Catalog entry streaming: `CatalogEntryUtils.scanEntries`
   (`CatalogEntryUtils.java:57-61`) — delegates to
   `dicomCatalogs` + `catalogEntries`.
@@ -323,7 +324,7 @@ than by SQL:
 ### 5.4 Return Key Handling
 
 `DimseDataAccess.copyReturnKeys` at
-`query/impl/DimseDataAccess.java:526-533`: iterates the query
+`query/impl/DimseDataAccess.java:546-553`: iterates the query
 tags and adds a `setNull` for any tag not already present in the
 result, using the VR from the query (or `LO` as fallback). Called
 from every row mapper (`:162`, `:194`, `:232`) and from
@@ -354,8 +355,7 @@ ID — by substituting a sentinel string such as `UNKNOWN`.
   §8.3.4.1). The sibling `xnat-dicomweb-plugin` emits a literal
   `UNKNOWN` for absent patient identifiers (its CONFORMANCE
   §0.7); that is a documented deviation, and the divergence
-  between the two plugins here is intentional — see
-  `CONFORMANCE-RECONCILIATION-PLAN.md` R2.
+  between the two plugins here is intentional.
 
 Verified against dicom.nema.org/medical/dicom/current/output/ on
 2026-07-23 (PS3.4 §C.2.2.1, §C.4.1.1.3.2; PS3.18 §10.6,
@@ -365,7 +365,25 @@ Verified against dicom.nema.org/medical/dicom/current/output/ on
 
 Matching happens on two sides: indexed keys are pushed to SQL by
 `DimseDataAccess`, non-indexed keys are post-filtered in Java by
-`DicomMatchUtils`. Both sides match case-insensitively (R4).
+`DicomMatchUtils`. Both sides are case-sensitive except for PN
+keys, which ignore case. One rule decides this for both:
+`DicomMatchUtils.ignoresCase` (`query/DicomMatchUtils.java:159-161`).
+PS3.4 C.2.2.2.1 makes Single Value Matching case-sensitive and
+C.2.2.2.4 makes Wild Card Matching "case sensitive, except for
+Attributes with a PN VR"; for PN, C.2.2.2.1.1 lets an application
+choose, and CONFORMANCE §5.5 states the choice. The XNAT DICOMweb
+plugin's QIDO-RS ignores case for every string key, so the two
+plugins can answer the same query differently.
+
+> **Regression hazard.** Do not make a non-PN key case-insensitive
+> in either layer (`ILIKE`, `LOWER`, `equalsIgnoreCase`,
+> `CASE_INSENSITIVE`, or a case-folding value mapping such as the
+> Modality `PT` reverse map). Both layers must call `ignoresCase` so
+> that they agree. Covered by `exactMatchIsCaseSensitiveExceptPn`,
+> `wildcardIsCaseSensitiveExceptPn` and `onlyPnIgnoresCase` in
+> `DicomMatchUtilsTest`, and the `stringFilter*`/`pn*`/`nonPn*`
+> cases and `modalityReverseMapIsCaseSensitive` in
+> `DimseDataAccessTest`.
 
 **Java side** — `query/DicomMatchUtils.java`:
 
@@ -374,7 +392,7 @@ Matching happens on two sides: indexed keys are pushed to SQL by
   and requires every remaining key to match. Every key is read with
   `getStrings`, so all query values are used: UI-VR keys go to
   `matchesUidList`, every other VR to `matchesAnyValue`.
-- `matchesUidList` (`:253-265`) implements List of UID Matching
+- `matchesUidList` (`:269-281`) implements List of UID Matching
   (PS3.4 C.2.2.2.2): the candidate matches if any of its values
   exactly equals any query UID; an absent or
   all-empty query is universal. dcm4che has already split the
@@ -396,7 +414,7 @@ Matching happens on two sides: indexed keys are pushed to SQL by
   (`:79-81`).
 - `matchesValue` (`:115-145`) dispatches by VR:
   - Empty query value, or one made only of `*` (checked by
-    `isUniversalWildcard`, `:169-171`) → universal match
+    `isUniversalWildcard`, `:185-187`) → universal match
     (`:118-120`). PS3.4 C.2.2.2.4: `*` matches any sequence
     including a zero-length value, so a lone `*` must also match
     empty and absent values; it is tested before the
@@ -412,23 +430,22 @@ Matching happens on two sides: indexed keys are pushed to SQL by
     `IllegalArgumentException`: it can only arrive if a caller
     skipped `DateTimeKeys.requireValid`.
   - `VR.DT` / `VR.TM` → `matchesDateRange` (string comparison)
-    when a `-` is present (`:134-138`, `:230-239`). TM values are
+    when a `-` is present (`:134-138`, `:246-255`). TM values are
     validated (§5.2) but still matched as strings, so an exact TM
     query of lower precision than the stored value (`10` against
     `103000`) does not match. Study Time, the only TM key in the
     conformance tables, is not listed as a matching key.
-  - Wildcards → `matchesWildcard` (`:139-141`, `:188-192`) via a
-    regex from `wildcardToRegex` (`:200-223`), compiled with
-    `CASE_INSENSITIVE`.
-  - Otherwise a case-insensitive exact match
-    (`equalsIgnoreCase`, `:142-144`) — for every VR, not only PN
-    (R4).
-- `parseDateRange` (`:341-358`) is the single definition of a valid
+  - Wildcards → `matchesWildcard` (`:139-141`, `:204-208`) via a
+    regex from `wildcardToRegex` (`:216-239`), compiled with
+    `CASE_INSENSITIVE` only for PN.
+  - Otherwise an exact match (`:142-144`): `equalsIgnoreCase` for
+    PN, `equals` for every other VR.
+- `parseDateRange` (`:357-374`) is the single definition of a valid
   DA query value, used by `DateTimeKeys` and by both matching
-  layers. It returns a `DateRange` record (`:313-326`) of lower
+  layers. It returns a `DateRange` record (`:329-342`) of lower
   and upper `YYYYMMDD` bounds, at least one present (an exact date
   has equal bounds), and an `exact` flag; or empty if a bound fails
-  `isValidDicomDate` (`:368-378`), no bound is given, or the range
+  `isValidDicomDate` (`:384-394`), no bound is given, or the range
   is reversed. `contains` compares a candidate with each present
   bound as a string, which orders correctly for `YYYYMMDD`.
 
@@ -439,9 +456,11 @@ appended as ` AND …` by `buildStudyQuery` (`:82-88`),
 `search-studies.sql` ends with a `WHERE TRUE` anchor and
 `search-patients.sql` parenthesizes its project-scope disjunction,
 so the filters restrict rows rather than attaching to a
-`LEFT JOIN … ON`. (`search-series.sql` was already correct.)
+`LEFT JOIN … ON`. `search-series.sql` ends with its top-level
+`WHERE`, whose project-scope disjunction is parenthesized
+(`sql/search-series.sql:23-29`).
 
-- `addStudyFilters` (`:239-247`): StudyInstanceUID, StudyDate,
+- `addStudyFilters` (`query/impl/DimseDataAccess.java:239-247`): StudyInstanceUID, StudyDate,
   AccessionNumber, PatientID, PatientName.
 - `addSeriesFilters` (`:251-261`): SeriesInstanceUID, Modality
   (each value reverse-mapped PT→PET via `dicomToXnatModality`;
@@ -449,31 +468,38 @@ so the filters restrict rows rather than attaching to a
 - `addPatientFilters` (`:265-272`): PatientID, PatientName.
 - `addUidFilter` (`:280-298`): single UID → `= :uid`; list →
   `IN (:uidList)` (UIDs matched exactly).
-- `addStringFilter` — `:307-315` (by tag) passes all non-empty
-  values to the list overload `:326-344`, which emits
-  `ILIKE :param` per value with the value routed through
-  `DicomMatchUtils.toSqlLike` (`:275-298`) (R4). A value with no
-  wildcards is a case-insensitive exact match; the overload lets
-  `addSeriesFilters` pass the reverse-mapped Modality values. If
-  any value is made only of `*`, no predicate is added
-  (`:334-336`): `ILIKE '%'` would drop rows where the column is
-  NULL (for example `psl.subject_label`), contradicting universal
-  matching.
-- `addDateFilter` (`:352-362`): one predicate per value, from
-  `datePredicate` (`:378-400`), which takes its bounds from
+- `addStringFilter` — `:304-313` (by tag) passes all non-empty
+  values, and the key's VR from the Identifier (as `matchesQuery`
+  uses), to the list overload `:328-344`; `addSeriesFilters` calls
+  the overload directly with the reverse-mapped Modality values and
+  `VR.CS`. `stringPredicate` (`:354-364`) builds one predicate per
+  value:
+  - not PN, no wildcards → `column = :param`, value verbatim;
+  - not PN, wildcards → `column LIKE :param`;
+  - PN → `column ILIKE :param`, with or without wildcards.
+
+  `LIKE`/`ILIKE` values go through `DicomMatchUtils.toSqlLike`
+  (`query/DicomMatchUtils.java:291-314`), which maps `*`/`?` to
+  `%`/`_` and escapes literal `%`/`_`. If any value is made only of
+  `*`, no predicate is added
+  (`query/impl/DimseDataAccess.java:337-339`): `LIKE '%'` would drop
+  rows where the column is NULL (for example `psl.subject_label`),
+  contradicting universal matching.
+- `addDateFilter` (`query/impl/DimseDataAccess.java:372-382`): one predicate per value, from
+  `datePredicate` (`:398-420`), which takes its bounds from
   `DicomMatchUtils.parseDateRange` so the post-filter applies the
   same constraint. Values are already valid (§5.2); a malformed
   one throws `IllegalArgumentException`.
   An exact date becomes `=`, a range `>=` / `<=`. `dateComparison`
-  (`:407-414`) converts each bound to `YYYY-MM-DD`
-  (`dicomDateToIso`, `:388-395` in `DicomMatchUtils`) and compares
+  (`query/impl/DimseDataAccess.java:427-434`) converts each bound to `YYYY-MM-DD`
+  (`dicomDateToIso`, `query/DicomMatchUtils.java:404-411`) and compares
   as `CAST(:param AS DATE)` so the `date` column is not compared
   against a bound string.
 - Multi-valued keys: both filters hand their per-value predicates
-  to `appendAnyOf` (`:431-443`). One predicate is appended as is,
+  to `appendAnyOf` (`query/impl/DimseDataAccess.java:451-463`). One predicate is appended as is,
   with the plain parameter names (`:name`, `:dateStart`); several
   are parenthesized and ORed, with an index suffix on each name
-  (`indexSuffix`, `:449-451`; `:modality0`, `:modality1`). If any
+  (`indexSuffix`, `:469-471`; `:modality0`, `:modality1`). If any
   value restricts nothing (a lone `*` in a string key), the whole
   key is universal and nothing is appended.
 
@@ -502,9 +528,12 @@ so the filters restrict rows rather than attaching to a
 Note the two-layer arrangement: even for SQL-pushed keys, the
 Java `matchesQuery` filter runs afterwards
 (`query/impl/XnatDicomQueryService.java:62, 83, 98`). Both
-layers now match case-insensitively, so the Java pass re-checks
+layers apply the same case rule, so the Java pass re-checks
 non-pushed keys and the VR-specific semantics SQL does not model
-(date/time ranges, UID lists) rather than correcting case.
+(date/time ranges, UID lists); it does not need to correct case.
+For PN, PostgreSQL's `ILIKE` folds case by the database locale and
+Java's `equalsIgnoreCase` character by character, so for non-ASCII
+Patient Names the two layers might disagree; this is not tested.
 
 ### 5.6 C-FIND Status Codes
 
@@ -571,19 +600,16 @@ translation layer:
   `query/impl/DimseDataAccess.java:145` sets it from the
   `projectId` parameter of `mapStudyRow`. This matches the
   XNAT DICOMweb plugin (`XnatDicomServiceImpl`, Study
-  Description = project ID). Reconciled under R1
-  (`CONFORMANCE-RECONCILIATION-PLAN.md`) on 2026-07-23; prior
-  to that the row mapper emitted a literal empty string and the
-  conformance statement described it as the session note.
+  Description = project ID).
 - **Referring Physician Name** = always empty — not set by the
   row mapper, so `copyReturnKeys`
-  (`query/impl/DimseDataAccess.java:526-533`) emits a zero-length
+  (`query/impl/DimseDataAccess.java:546-553`) emits a zero-length
   value if the SCU requested it.
 
 ### 5.8 Gender Mapping
 
 `query/impl/DimseDataAccess.genderToDicomSex`
-(`query/impl/DimseDataAccess.java:481-492`).
+(`query/impl/DimseDataAccess.java:501-512`).
 
 - Blank / null → `Optional.empty()` (not included in response).
 - `m` / `male` (case-insensitive) → `M`.
@@ -593,7 +619,7 @@ translation layer:
 ### 5.9 Modality Mapping
 
 - On the row-mapper side, `dicomModality`
-  (`query/impl/DimseDataAccess.java:497-507`) maps `PET` → `PT`
+  (`query/impl/DimseDataAccess.java:517-527`) maps `PET` → `PT`
   and truncates values longer than 16 characters. Used by
   `searchSeries` at `:189`.
 - On the SQL side (STUDY level aggregation), the same `PET`→`PT`
@@ -601,8 +627,8 @@ translation layer:
   `sql/search-studies.sql:38-51` (in the `scan_modalities`
   CTE) before the values are `string_agg`ed and returned as the
   `modalities` column.
-- **Reverse mapping for matching (R3).** `dicomToXnatModality`
-  (`query/impl/DimseDataAccess.java:518-520`) maps a query value
+- **Reverse mapping for matching.** `dicomToXnatModality`
+  (`query/impl/DimseDataAccess.java:538-540`) maps a query value
   of `PT` back to `PET`; `addSeriesFilters` (`:251-261`) applies
   it before building the SERIES `Modality` filter, so a query
   using the DICOM code `PT` matches scans whose XNAT modality is
@@ -690,8 +716,8 @@ user identity.
 
 `scp/XnatCGetScp.findSessions` (`scp/XnatCGetScp.java:174-194`):
 
-- `StudyInstanceUID` values (space-separated; dcm4che returns
-  multi-values as an array) drive
+- `StudyInstanceUID` values (a backslash-separated list; dcm4che
+  returns the values as an array) drive
   `XnatImagesessiondata.getXnatImagesessiondatasByField`
   (`:181-184`), filtered by `sessionsInProject` (`:180`).
 - Falls back to `PatientID` if no Study UIDs are present
@@ -761,11 +787,11 @@ Transcoding: `scp/XnatCGetScp.createDataWriter`
 
 - Guard: only if `tsuid != inst.tsuid` and both are uncompressed
   (`:101`). `isUncompressed` is a set lookup against
-  `UNCOMPRESSED_TRANSFER_SYNTAXES` at `:218-222` (implemented at
-  `:236-238`).
+  `UNCOMPRESSED_TRANSFER_SYNTAXES` at `:237-241` (implemented at
+  `:255-257`).
 - Actual transcoding is a full parse-and-reserialize: read
   metadata + dataset via `DicomInputStream`
-  (`:102-106`) and hand it to `DataWriterAdapter`, which
+  (`:103-106`) and hand it to `DataWriterAdapter`, which
   serializes in whatever TS dcm4che was told to write. There is
   no streaming path.
 - Any other combination (compressed source, compressed target,
@@ -930,7 +956,8 @@ consequences of the code paths already annotated above:
 
 The following source files were verified against the conformance
 statement at the date below. Any subsequent re-verification pass
-should start here.
+should start here. File:line references throughout this document
+were re-checked against the code on 2026-10-20.
 
 - `src/main/java/org/nrg/xnat/dimse/DimsePlugin.java` (the
   preference-aware constructor at `:43-51`)
@@ -942,17 +969,18 @@ should start here.
   (focused on `:60-80` resolve and the `:74-77` enable gate)
 - `src/main/java/org/nrg/xnat/dimse/scp/XnatCFindScp.java`
 - `src/main/java/org/nrg/xnat/dimse/scp/XnatCGetScp.java`
-  (focused on `:71-111` retrieve task, `:121-157` catalog
-  walk, `:171-193` session lookup, `:218-266` TS
+  (focused on `:71-111` retrieve task, `:121-160` catalog
+  walk, `:174-235` session lookup, `:237-285` TS
   selection/transcoding)
 - `src/main/java/org/nrg/xnat/dimse/query/QueryLevel.java`
+- `src/main/java/org/nrg/xnat/dimse/query/DateTimeKeys.java`
 - `src/main/java/org/nrg/xnat/dimse/query/DicomMatchUtils.java`
 - `src/main/java/org/nrg/xnat/dimse/query/DicomQueryService.java`
 - `src/main/java/org/nrg/xnat/dimse/query/impl/XnatDicomQueryService.java`
 - `src/main/java/org/nrg/xnat/dimse/query/impl/DimseDataAccess.java`
-  (focused on `:117-147, :157-182, :191-220` row mappers;
-  `:260-398` filter builders; `:453-492` gender/modality
-  mapping; `:498-505` `copyReturnKeys`)
+  (focused on `:134-164, :184-196, :214-234` row mappers;
+  `:239-471` filter builders; `:501-540` gender/modality
+  mapping; `:546-553` `copyReturnKeys`)
 - `src/main/java/org/nrg/xnat/dimse/CatalogEntryUtils.java`
 - `src/main/java/org/nrg/dcm/FileInstanceLocator.java`
 - `src/main/java/org/nrg/xnat/dimse/config/DimsePreferences.java`
@@ -975,23 +1003,26 @@ conformance statement itself and should be verified against the
 standard before the next release.
 
 **Exception (2026-07-23).** The return-key / no-value semantics
-cited in §5.4 *were* verified this pass against
+cited in §5.4 *were* verified on that date against
 dicom.nema.org/medical/dicom/current/output/: PS3.4 §C.2.2.1
 (Q/R Unique / Required / Optional key types) and §C.4.1.1.3.2
 Note 2 (zero-length no-value in the Response Identifier), plus
 PS3.18 §10.6 → §8.3.4.1 (QIDO reuses the PS3.4 matching model).
+
+**Exception (2026-10-20).** The matching and status text in §5.2,
+§5.5 and §5.6, and the matching semantics in CONFORMANCE §5.5 and
+§5.6, were verified on that date against
+dicom.nema.org/medical/dicom/current/output/: PS3.4 C.2.2.2.1
+(Single Value Matching is case-sensitive), C.2.2.2.2 (List of UID
+Matching), C.2.2.2.4 (Wild Card Matching: VRs, case sensitivity,
+`*` as Universal Matching), C.2.2.2.5 (Range Matching forms),
+C.2.2.2.7 (Empty Value Matching needs Extended Negotiation),
+C.2.2.2.8 (Multiple Value Matching, Note 4), C.4.1.2.1 (single
+value in each Unique Key above the query level) and Table C.4-1
+(C-FIND failure statuses and their related fields); PS3.5 Table 6.2-1 (DA
+and TM formats, leap second).
 All other spec-level claims remain unverified as above.
-
-Previously-known deviation, now resolved:
-
-- **Study Description** — earlier drafts emitted a literal empty
-  string while §5.7 claimed the XNAT session note. Reconciled
-  under R1 (`CONFORMANCE-RECONCILIATION-PLAN.md`) on 2026-07-23:
-  `query/impl/DimseDataAccess.java:145` now sets the project ID,
-  and §0 / §5.3.2 / §5.7 of the conformance statement were
-  updated to match.
 
 ---
 
 **Date:** 2026-07-23
-</content>

@@ -137,11 +137,27 @@ public final class DicomMatchUtils {
             }
         }
         if (containsWildcard(queryValue)) {
-            return matchesWildcard(queryValue, candidateValue);
+            return matchesWildcard(queryValue, candidateValue, vr);
         }
-        // Single value exact match, case-insensitive (consistent with
-        // the case-insensitive SQL push-down in DimseDataAccess).
-        return candidateValue.equalsIgnoreCase(queryValue);
+        return ignoresCase(vr)
+                ? candidateValue.equalsIgnoreCase(queryValue)
+                : candidateValue.equals(queryValue);
+    }
+
+    /**
+     * Tests whether matching on a key of this VR ignores case. Only PN
+     * does: PS3.4 C.2.2.2.1 makes Single Value Matching case-sensitive,
+     * and C.2.2.2.4 makes Wild Card Matching case sensitive except for
+     * PN. For PN, C.2.2.2.1.1 lets an application match case-sensitively
+     * or not; this SCP ignores case. Both matching layers use this rule
+     * (the SQL push-down in {@code DimseDataAccess} emits {@code ILIKE}
+     * only where it holds), so they agree.
+     *
+     * @param vr the key's Value Representation
+     * @return true if matching ignores case
+     */
+    public static boolean ignoresCase(final VR vr) {
+        return vr == VR.PN;
     }
 
     /**
@@ -183,11 +199,11 @@ public final class DicomMatchUtils {
     /**
      * Matches using DICOM wildcard rules: '*' matches any sequence
      * of characters, '?' matches any single character. Matching is
-     * case-insensitive.
+     * case-sensitive unless {@link #ignoresCase} holds for the VR.
      */
-    static boolean matchesWildcard(final String pattern, final String value) {
+    static boolean matchesWildcard(final String pattern, final String value, final VR vr) {
         final String regex = wildcardToRegex(pattern);
-        return Pattern.compile(regex, Pattern.CASE_INSENSITIVE)
+        return Pattern.compile(regex, ignoresCase(vr) ? Pattern.CASE_INSENSITIVE : 0)
                 .matcher(value).matches();
     }
 

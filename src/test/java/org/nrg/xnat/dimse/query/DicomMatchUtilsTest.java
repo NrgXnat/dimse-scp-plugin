@@ -54,14 +54,25 @@ public class DicomMatchUtilsTest {
     }
 
     @Test
-    public void exactMatchIsCaseInsensitiveForAllVrs() {
-        // R4: matching is case-insensitive throughout, not just for PN.
-        assertTrue(DicomMatchUtils.matchesValue(
+    public void exactMatchIsCaseSensitiveExceptPn() {
+        // PS3.4 C.2.2.2.1: Single Value Matching is case-sensitive.
+        assertFalse(DicomMatchUtils.matchesValue(
                 Tag.AccessionNumber, VR.SH, "acc001", "ACC001"));
-        assertTrue(DicomMatchUtils.matchesValue(
+        assertFalse(DicomMatchUtils.matchesValue(
                 Tag.Modality, VR.CS, "ct", "CT"));
-        assertTrue(DicomMatchUtils.matchesValue(
+        assertFalse(DicomMatchUtils.matchesValue(
                 Tag.PatientID, VR.LO, "SUBJECT01", "subject01"));
+        assertTrue(DicomMatchUtils.matchesValue(
+                Tag.PatientID, VR.LO, "subject01", "subject01"));
+    }
+
+    @Test
+    public void onlyPnIgnoresCase() {
+        assertTrue(DicomMatchUtils.ignoresCase(VR.PN));
+        for (final VR vr : Arrays.asList(VR.AE, VR.CS, VR.LO, VR.LT, VR.SH,
+                VR.ST, VR.UC, VR.UR, VR.UT, VR.IS, VR.UI)) {
+            assertFalse(vr.toString(), DicomMatchUtils.ignoresCase(vr));
+        }
     }
 
     // --- Wildcard matching ---
@@ -97,12 +108,14 @@ public class DicomMatchUtilsTest {
     }
 
     @Test
-    public void wildcardIsCaseInsensitiveForAllVrs() {
-        // R4: wildcard matching is case-insensitive for every VR.
-        assertTrue(DicomMatchUtils.matchesValue(
+    public void wildcardIsCaseSensitiveExceptPn() {
+        // PS3.4 C.2.2.2.4: case sensitive, except for PN.
+        assertFalse(DicomMatchUtils.matchesValue(
                 Tag.PatientID, VR.LO, "sub*", "SUBJECT01"));
         assertTrue(DicomMatchUtils.matchesValue(
-                Tag.SeriesNumber, VR.IS, "*", "5"));
+                Tag.PatientID, VR.LO, "SUB*", "SUBJECT01"));
+        assertFalse(DicomMatchUtils.matchesValue(
+                Tag.Modality, VR.CS, "c?", "CT"));
     }
 
     @Test
@@ -143,8 +156,8 @@ public class DicomMatchUtilsTest {
 
     @Test
     public void loneStarThroughMatchesQuery() {
-        // Reviewer's probe: ReferringPhysicianName=* must match a study
-        // whose value is zero length.
+        // ReferringPhysicianName=* must match a study whose value is zero
+        // length: the SCP never sets Referring Physician Name.
         final Attributes query = new Attributes();
         query.setString(Tag.QueryRetrieveLevel, VR.CS, "STUDY");
         query.setString(Tag.ReferringPhysicianName, VR.PN, "*");
@@ -337,8 +350,8 @@ public class DicomMatchUtilsTest {
                 Tag.ModalitiesInStudy, VR.CS, new String[]{"PT"}, new String[]{"CT", "PT"}));
         assertTrue(DicomMatchUtils.matchesAnyValue(
                 Tag.ModalitiesInStudy, VR.CS, new String[]{"CT"}, new String[]{"CT", "PT"}));
-        // case-insensitive, per R4
-        assertTrue(DicomMatchUtils.matchesAnyValue(
+        // CS matching is case-sensitive
+        assertFalse(DicomMatchUtils.matchesAnyValue(
                 Tag.ModalitiesInStudy, VR.CS, new String[]{"pt"}, new String[]{"CT", "PT"}));
     }
 

@@ -256,7 +256,7 @@ public class DimseDataAccess {
                 DicomMatchUtils.nonEmptyValues(keys.getStrings(Tag.Modality)).stream()
                         .map(DimseDataAccess::dicomToXnatModality)
                         .toList(),
-                "sc.modality", "modality");
+                VR.CS, "sc.modality", "modality");
         addStringFilter(sql, params, keys, Tag.SeriesNumber, "sc.id", "seriesNumber");
     }
 
@@ -298,11 +298,8 @@ public class DimseDataAccess {
     }
 
     /**
-     * Adds a case-insensitive string filter for the given tag,
-     * translating DICOM wildcards ({@code *}, {@code ?}) to a SQL
-     * {@code ILIKE} pattern. A value with no wildcards becomes a
-     * case-insensitive exact match. A multi-valued key matches if any
-     * value matches, as in {@link DicomMatchUtils#matchesAnyValue}.
+     * Adds a string filter for the given tag, using the key's VR from
+     * the Identifier, as the post-filter does. See the list overload.
      */
     void addStringFilter(final StringBuilder sql,
                                  final MapSqlParameterSource params,
@@ -311,21 +308,27 @@ public class DimseDataAccess {
                                  final String column,
                                  final String paramName) {
         addStringFilter(sql, params,
-                DicomMatchUtils.nonEmptyValues(keys.getStrings(tag)), column, paramName);
+                DicomMatchUtils.nonEmptyValues(keys.getStrings(tag)), keys.getVR(tag),
+                column, paramName);
     }
 
     /**
-     * Adds a case-insensitive string filter for explicit values. Used
-     * where the query values need preprocessing before matching (e.g.
-     * the {@code PT} to {@code PET} Modality reverse mapping in
-     * {@link #addSeriesFilters}). Several values are ORed. Empty values
-     * are ignored; if none remain, or any value is only {@code *}, no
-     * predicate is added: that is universal matching, and
-     * {@code ILIKE '%'} would wrongly drop rows where the column is NULL.
+     * Adds a string filter for explicit values. Used directly where the
+     * query values need preprocessing before matching (e.g. the
+     * {@code PT} to {@code PET} Modality reverse mapping in
+     * {@link #addSeriesFilters}).
+     *
+     * <p>Each value becomes one predicate (see {@link #stringPredicate});
+     * several are ORed, as in {@link DicomMatchUtils#matchesAnyValue}.
+     * Empty values are ignored; if none remain, or any value is only
+     * {@code *}, no predicate is added: that is universal matching, and
+     * {@code LIKE '%'} would wrongly drop rows where the column is
+     * NULL.</p>
      */
     void addStringFilter(final StringBuilder sql,
                                  final MapSqlParameterSource params,
                                  final List<String> values,
+                                 final VR vr,
                                  final String column,
                                  final String paramName) {
         final List<String> patterns = values.stream()
@@ -335,12 +338,29 @@ public class DimseDataAccess {
             return;
         }
         appendAnyOf(sql, params, IntStream.range(0, patterns.size())
-                .mapToObj(i -> {
-                    final String name = paramName + indexSuffix(i, patterns.size());
-                    return Optional.of(new SqlPredicate(column + " ILIKE :" + name,
-                            Map.of(name, DicomMatchUtils.toSqlLike(patterns.get(i)))));
-                })
+                .mapToObj(i -> Optional.of(stringPredicate(column,
+                        paramName + indexSuffix(i, patterns.size()), patterns.get(i), vr)))
                 .toList());
+    }
+
+    /**
+     * Builds the predicate for one string query value, case-sensitive
+     * unless {@link DicomMatchUtils#ignoresCase} holds for the VR (PN):
+     * a value with wildcards becomes {@code LIKE} (or {@code ILIKE}) with
+     * the pattern from {@link DicomMatchUtils#toSqlLike}; one without
+     * becomes {@code =} (or {@code ILIKE} with its {@code %} and
+     * {@code _} escaped).
+     */
+    private static SqlPredicate stringPredicate(final String column,
+                                                final String name,
+                                                final String value,
+                                                final VR vr) {
+        final boolean ignoresCase = DicomMatchUtils.ignoresCase(vr);
+        if (!ignoresCase && !DicomMatchUtils.containsWildcard(value)) {
+            return new SqlPredicate(column + " = :" + name, Map.of(name, value));
+        }
+        return new SqlPredicate(column + (ignoresCase ? " ILIKE :" : " LIKE :") + name,
+                Map.of(name, DicomMatchUtils.toSqlLike(value)));
     }
 
     /**
@@ -516,7 +536,7 @@ public class DimseDataAccess {
      * @return the value to match against the XNAT modality column
      */
     static String dicomToXnatModality(final String dicomModality) {
-        return "PT".equalsIgnoreCase(dicomModality) ? "PET" : dicomModality;
+        return "PT".equals(dicomModality) ? "PET" : dicomModality;
     }
 
     /**

@@ -113,7 +113,7 @@ public class DimseDataAccessTest {
         assertEquals("SMITH", attrs.getString(Tag.PatientName));
     }
 
-    // --- mapStudyRow (R1: Study Description = project ID) ---
+    // --- mapStudyRow (Study Description = project ID) ---
 
     @Test
     public void studyRowSetsStudyDescriptionToProjectId() throws Exception {
@@ -125,7 +125,7 @@ public class DimseDataAccessTest {
         final Attributes attrs =
                 DimseDataAccess.mapStudyRow(rs, "MYPROJECT", new Attributes());
 
-        // R1: Study Description is the project ID, matching DICOMweb.
+        // Study Description is the project ID, matching DICOMweb.
         assertEquals("MYPROJECT", attrs.getString(Tag.StudyDescription));
 
         // Sibling mappings, documenting the study row shape.
@@ -173,7 +173,7 @@ public class DimseDataAccessTest {
         // AND applies to the whole predicate, not just the EXISTS branch.
         assertTrue(sql.contains("WHERE (s.project = :projectId"));
         assertTrue(sql.contains(
-                "AND COALESCE(psl.subject_label, s.label) ILIKE :patientId"));
+                "AND COALESCE(psl.subject_label, s.label) = :patientId"));
     }
 
     // --- addUidFilter ---
@@ -236,7 +236,7 @@ public class DimseDataAccessTest {
 
     @Test
     public void stringFilterLoneStarNoOp() {
-        // A lone * is universal matching; ILIKE '%' would drop NULL rows.
+        // A lone * is universal matching; LIKE '%' would drop NULL rows.
         for (final String value : Arrays.asList("*", "**")) {
             final StringBuilder sql = new StringBuilder("SELECT 1");
             final MapSqlParameterSource params = new MapSqlParameterSource();
@@ -252,23 +252,52 @@ public class DimseDataAccessTest {
     }
 
     @Test
-    public void stringFilterExactMatchUsesIlike() {
+    public void pnExactMatchUsesIlike() {
         final StringBuilder sql = new StringBuilder("SELECT 1");
         final MapSqlParameterSource params = new MapSqlParameterSource();
         final Attributes keys = new Attributes();
-        keys.setString(Tag.PatientName, VR.PN, "SMITH");
+        keys.setString(Tag.PatientName, VR.PN, "SMITH_1%");
 
         newAccess().addStringFilter(sql, params, keys,
                 Tag.PatientName, "e.label", "name");
 
-        // R4: case-insensitive matching pushed to SQL via ILIKE. A
-        // value with no wildcards is a case-insensitive exact match.
-        assertTrue(sql.toString().contains("AND e.label ILIKE :name"));
-        assertEquals("SMITH", params.getValue("name"));
+        // PN ignores case, so even an exact value goes through ILIKE,
+        // with its LIKE metacharacters escaped.
+        assertEquals("SELECT 1 AND e.label ILIKE :name", sql.toString());
+        assertEquals("SMITH\\_1\\%", params.getValue("name"));
     }
 
     @Test
-    public void stringFilterWildcardUsesIlike() {
+    public void nonPnExactMatchIsCaseSensitiveEquality() {
+        final StringBuilder sql = new StringBuilder("SELECT 1");
+        final MapSqlParameterSource params = new MapSqlParameterSource();
+        final Attributes keys = new Attributes();
+        keys.setString(Tag.PatientID, VR.LO, "Subj_1%");
+
+        newAccess().addStringFilter(sql, params, keys,
+                Tag.PatientID, "psl.subject_label", "patientId");
+
+        // Not PN: case-sensitive, and the value is compared verbatim.
+        assertEquals("SELECT 1 AND psl.subject_label = :patientId", sql.toString());
+        assertEquals("Subj_1%", params.getValue("patientId"));
+    }
+
+    @Test
+    public void nonPnWildcardUsesCaseSensitiveLike() {
+        final StringBuilder sql = new StringBuilder("SELECT 1");
+        final MapSqlParameterSource params = new MapSqlParameterSource();
+        final Attributes keys = new Attributes();
+        keys.setString(Tag.AccessionNumber, VR.SH, "XNAT_E*");
+
+        newAccess().addStringFilter(sql, params, keys,
+                Tag.AccessionNumber, "e.id", "accession");
+
+        assertEquals("SELECT 1 AND e.id LIKE :accession", sql.toString());
+        assertEquals("XNAT\\_E%", params.getValue("accession"));
+    }
+
+    @Test
+    public void pnWildcardUsesIlike() {
         final StringBuilder sql = new StringBuilder("SELECT 1");
         final MapSqlParameterSource params = new MapSqlParameterSource();
         final Attributes keys = new Attributes();
@@ -302,8 +331,8 @@ public class DimseDataAccessTest {
         final String sqlForward = stringFilterSql(forward, "MR", "CT");
         final String sqlReverse = stringFilterSql(reverse, "CT", "MR");
 
-        assertEquals("SELECT 1 AND ((sc.modality ILIKE :modality0)"
-                + " OR (sc.modality ILIKE :modality1))", sqlForward);
+        assertEquals("SELECT 1 AND ((sc.modality = :modality0)"
+                + " OR (sc.modality = :modality1))", sqlForward);
         assertEquals(sqlForward, sqlReverse);
         assertEquals(new HashSet<>(Arrays.asList("MR", "CT")),
                 new HashSet<>(Arrays.asList(forward.getValue("modality0"),
@@ -323,7 +352,7 @@ public class DimseDataAccessTest {
     @Test
     public void stringFilterIgnoresEmptyValues() {
         final MapSqlParameterSource params = new MapSqlParameterSource();
-        assertEquals("SELECT 1 AND sc.modality ILIKE :modality",
+        assertEquals("SELECT 1 AND sc.modality = :modality",
                 stringFilterSql(params, "", "MR"));
         assertEquals("MR", params.getValue("modality"));
     }
@@ -336,8 +365,8 @@ public class DimseDataAccessTest {
 
         final String sql = newAccess().buildSeriesQuery(keys, params);
 
-        assertTrue(sql.endsWith(" AND ((sc.modality ILIKE :modality0)"
-                + " OR (sc.modality ILIKE :modality1))"));
+        assertTrue(sql.endsWith(" AND ((sc.modality = :modality0)"
+                + " OR (sc.modality = :modality1))"));
         assertEquals("CT", params.getValue("modality0"));
         assertEquals("PET", params.getValue("modality1"));
     }
@@ -352,12 +381,17 @@ public class DimseDataAccessTest {
         return sql.toString();
     }
 
-    // --- Modality reverse mapping (R3: query PT matches XNAT PET) ---
+    // --- Modality reverse mapping (query PT matches XNAT PET) ---
 
     @Test
     public void modalityPtQueryReverseMapsToPet() {
         assertEquals("PET", DimseDataAccess.dicomToXnatModality("PT"));
-        assertEquals("PET", DimseDataAccess.dicomToXnatModality("pt"));
+    }
+
+    @Test
+    public void modalityReverseMapIsCaseSensitive() {
+        // CS matching is case-sensitive, so pt is not the code PT.
+        assertEquals("pt", DimseDataAccess.dicomToXnatModality("pt"));
     }
 
     @Test
@@ -468,7 +502,7 @@ public class DimseDataAccessTest {
         assertEquals("2021-01-31", params.getValue("dateEnd1"));
     }
 
-    // --- Count SQL (text checks; C7 integration tests run it) ---
+    // --- Count SQL (text checks only; these tests do not run the SQL) ---
 
     /** SQL form of CatalogEntryUtils.isDicomResource, used by every count. */
     private static final String DICOM_RESOURCE_RULE =

@@ -333,7 +333,7 @@ supported. The following query levels are available:
 
 The QueryRetrieveLevel attribute (0008,0052) is required in
 all C-FIND requests. The value "INSTANCE" is accepted as a
-synonym for "IMAGE". Matching is case-insensitive.
+synonym for "IMAGE". The value is accepted in any letter case.
 
 ### 5.3 Matching Keys and Return Keys
 
@@ -423,15 +423,26 @@ by the SCP are returned with zero length.
 
 ### 5.5 Matching Semantics
 
-- **Single Value Matching:** Case-insensitive for all string
-  attributes.
+- **Case sensitivity:** Matching is case-sensitive (PS3.4
+  C.2.2.2.1 and C.2.2.2.4), except for attributes with a PN VR,
+  such as Patient Name (0010,0010). For PN, which PS3.4
+  C.2.2.2.1.1 leaves to the implementation, this SCP ignores
+  case in both Single Value and Wild Card Matching: `smith` and
+  `sm*` match `SMITH`. For any other attribute the case must
+  match exactly: `ct` does not match Modality `CT`, and Patient ID
+  must match the case of the XNAT subject label. Matching is not
+  insensitive to accents or other character encoding variants.
+- **Single Value Matching:** an exact match, subject to the case
+  rule above.
 - **Wildcard Matching:** `*` matches any sequence of
-  characters, including none; `?` matches a single character.
-  Available for string VRs (not Date or Time, see below), and
-  case-insensitive. A value of
-  `*` alone is equivalent to Universal Matching (PS3.4
-  C.2.2.2.4): it also matches entities whose value for that
-  attribute is empty.
+  characters, including none; `?` matches a single character,
+  subject to the case rule above. PS3.4 C.2.2.2.4 defines Wild
+  Card Matching for the VRs AE, CS, LO, LT, PN, SH, ST, UC, UR
+  and UT; this SCP also applies it to the other keys it matches,
+  such as Series Number (IS), except Date and Time keys (rejected,
+  see below) and UIDs (always exact). A value of `*` alone is
+  equivalent to Universal Matching (PS3.4 C.2.2.2.4): it also
+  matches entities whose value for that attribute is empty.
 - **Date Range Matching:** Format `YYYYMMDD-YYYYMMDD`. Either
   bound, but not both, may be omitted for an open-ended range
   (PS3.4 C.2.2.2.5).
@@ -618,12 +629,14 @@ of scan catalog resources whose label, format, or content
 contains `DICOM` or `secondary`, ignoring case (the same rule
 as the file counts in section 5.10).
 Data held under other resource types is not retrievable via
-C-GET, which may cause a session to return fewer instances (or
-none) than its C-FIND counts suggest.
+C-GET. A C-GET can still return fewer instances than the C-FIND
+counts: the counts include every file in a matching resource,
+while C-GET sends only its DICOM catalog entries.
 
 If an instance's file cannot be located on disk or cannot be
-read, that instance is silently skipped — omitted from the
-retrieval rather than reported as a failed sub-operation.
+read, or a resource catalog cannot be read, the affected
+instances are silently skipped — omitted from the retrieval
+rather than reported as failed sub-operations.
 
 ### 6.4 Transfer Syntax Selection and Transcoding
 
