@@ -8,6 +8,7 @@ import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 
 import java.sql.ResultSet;
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
 
@@ -294,6 +295,63 @@ public class DimseDataAccessTest {
         assertEquals("SM_TH", params.getValue("name"));
     }
 
+    @Test
+    public void stringFilterMultipleValuesOrderIndependent() {
+        final MapSqlParameterSource forward = new MapSqlParameterSource();
+        final MapSqlParameterSource reverse = new MapSqlParameterSource();
+        final String sqlForward = stringFilterSql(forward, "MR", "CT");
+        final String sqlReverse = stringFilterSql(reverse, "CT", "MR");
+
+        assertEquals("SELECT 1 AND ((sc.modality ILIKE :modality0)"
+                + " OR (sc.modality ILIKE :modality1))", sqlForward);
+        assertEquals(sqlForward, sqlReverse);
+        assertEquals(new HashSet<>(Arrays.asList("MR", "CT")),
+                new HashSet<>(Arrays.asList(forward.getValue("modality0"),
+                        forward.getValue("modality1"))));
+        assertEquals(new HashSet<>(Arrays.asList("MR", "CT")),
+                new HashSet<>(Arrays.asList(reverse.getValue("modality0"),
+                        reverse.getValue("modality1"))));
+    }
+
+    @Test
+    public void stringFilterMultipleValuesWithLoneStarNoOp() {
+        final MapSqlParameterSource params = new MapSqlParameterSource();
+        assertEquals("SELECT 1", stringFilterSql(params, "MR", "*"));
+        assertFalse(params.hasValue("modality0"));
+    }
+
+    @Test
+    public void stringFilterIgnoresEmptyValues() {
+        final MapSqlParameterSource params = new MapSqlParameterSource();
+        assertEquals("SELECT 1 AND sc.modality ILIKE :modality",
+                stringFilterSql(params, "", "MR"));
+        assertEquals("MR", params.getValue("modality"));
+    }
+
+    @Test
+    public void seriesQueryMapsEachModalityValue() {
+        final Attributes keys = new Attributes();
+        keys.setString(Tag.Modality, VR.CS, "CT", "PT");
+        final MapSqlParameterSource params = new MapSqlParameterSource();
+
+        final String sql = newAccess().buildSeriesQuery(keys, params);
+
+        assertTrue(sql.endsWith(" AND ((sc.modality ILIKE :modality0)"
+                + " OR (sc.modality ILIKE :modality1))"));
+        assertEquals("CT", params.getValue("modality0"));
+        assertEquals("PET", params.getValue("modality1"));
+    }
+
+    private static String stringFilterSql(final MapSqlParameterSource params,
+                                          final String... modalities) {
+        final StringBuilder sql = new StringBuilder("SELECT 1");
+        final Attributes keys = new Attributes();
+        keys.setString(Tag.Modality, VR.CS, modalities);
+        newAccess().addStringFilter(sql, params, keys,
+                Tag.Modality, "sc.modality", "modality");
+        return sql.toString();
+    }
+
     // --- Modality reverse mapping (R3: query PT matches XNAT PET) ---
 
     @Test
@@ -410,6 +468,37 @@ public class DimseDataAccessTest {
         assertTrue(result.contains("AND e.date >= CAST(:dateStart AS DATE)"));
         assertEquals("2005-07-01", params.getValue("dateStart"));
         assertFalse(result.contains("dateEnd"));
+    }
+
+    @Test
+    public void dateFilterMultipleValuesOred() {
+        final StringBuilder sql = new StringBuilder("SELECT 1");
+        final MapSqlParameterSource params = new MapSqlParameterSource();
+        final Attributes keys = new Attributes();
+        keys.setString(Tag.StudyDate, VR.DA, "20200615", "20210101-20210131");
+
+        newAccess().addDateFilter(sql, params, keys, Tag.StudyDate, "e.date");
+
+        assertEquals("SELECT 1 AND ((e.date = CAST(:dateExact0 AS DATE))"
+                + " OR (e.date >= CAST(:dateStart1 AS DATE)"
+                + " AND e.date <= CAST(:dateEnd1 AS DATE)))", sql.toString());
+        assertEquals("2020-06-15", params.getValue("dateExact0"));
+        assertEquals("2021-01-01", params.getValue("dateStart1"));
+        assertEquals("2021-01-31", params.getValue("dateEnd1"));
+    }
+
+    @Test
+    public void dateFilterMultipleValuesWithInvalidValueNoOp() {
+        // An invalid value restricts nothing, so the OR is universal.
+        final StringBuilder sql = new StringBuilder("SELECT 1");
+        final MapSqlParameterSource params = new MapSqlParameterSource();
+        final Attributes keys = new Attributes();
+        keys.setString(Tag.StudyDate, VR.DA, "20200615", "20200732");
+
+        newAccess().addDateFilter(sql, params, keys, Tag.StudyDate, "e.date");
+
+        assertEquals("SELECT 1", sql.toString());
+        assertFalse(params.hasValue("dateExact0"));
     }
 
     /**

@@ -125,9 +125,9 @@ public class DicomMatchUtilsTest {
     @Test
     public void loneStarMatchesAbsentCandidate() {
         assertTrue(DicomMatchUtils.matchesAnyValue(
-                Tag.ReferringPhysicianName, VR.PN, "*", null));
+                Tag.ReferringPhysicianName, VR.PN, new String[]{"*"}, null));
         assertTrue(DicomMatchUtils.matchesAnyValue(
-                Tag.ReferringPhysicianName, VR.PN, "*", new String[0]));
+                Tag.ReferringPhysicianName, VR.PN, new String[]{"*"}, new String[0]));
     }
 
     @Test
@@ -137,7 +137,7 @@ public class DicomMatchUtilsTest {
         assertFalse(DicomMatchUtils.matchesValue(
                 Tag.PatientName, VR.PN, "?*", ""));
         assertFalse(DicomMatchUtils.matchesAnyValue(
-                Tag.PatientName, VR.PN, "S*", null));
+                Tag.PatientName, VR.PN, new String[]{"S*"}, null));
     }
 
     @Test
@@ -259,23 +259,23 @@ public class DicomMatchUtilsTest {
     @Test
     public void multiValuedCandidateMatchesAnyValue() {
         assertTrue(DicomMatchUtils.matchesAnyValue(
-                Tag.ModalitiesInStudy, VR.CS, "PT", new String[]{"CT", "PT"}));
+                Tag.ModalitiesInStudy, VR.CS, new String[]{"PT"}, new String[]{"CT", "PT"}));
         assertTrue(DicomMatchUtils.matchesAnyValue(
-                Tag.ModalitiesInStudy, VR.CS, "CT", new String[]{"CT", "PT"}));
+                Tag.ModalitiesInStudy, VR.CS, new String[]{"CT"}, new String[]{"CT", "PT"}));
         // case-insensitive, per R4
         assertTrue(DicomMatchUtils.matchesAnyValue(
-                Tag.ModalitiesInStudy, VR.CS, "pt", new String[]{"CT", "PT"}));
+                Tag.ModalitiesInStudy, VR.CS, new String[]{"pt"}, new String[]{"CT", "PT"}));
     }
 
     @Test
     public void multiValuedCandidateRejectsAbsentAndEmpty() {
         assertFalse(DicomMatchUtils.matchesAnyValue(
-                Tag.ModalitiesInStudy, VR.CS, "MR", new String[]{"CT", "PT"}));
+                Tag.ModalitiesInStudy, VR.CS, new String[]{"MR"}, new String[]{"CT", "PT"}));
         assertFalse(DicomMatchUtils.matchesAnyValue(
-                Tag.ModalitiesInStudy, VR.CS, "CT", null));
+                Tag.ModalitiesInStudy, VR.CS, new String[]{"CT"}, null));
         // universal query matches regardless
         assertTrue(DicomMatchUtils.matchesAnyValue(
-                Tag.ModalitiesInStudy, VR.CS, "", new String[]{"CT"}));
+                Tag.ModalitiesInStudy, VR.CS, new String[]{""}, new String[]{"CT"}));
     }
 
     @Test
@@ -301,6 +301,85 @@ public class DicomMatchUtilsTest {
         candidate.setString(Tag.ModalitiesInStudy, VR.CS, "CT", "PT");
 
         assertFalse(DicomMatchUtils.matchesQuery(query).test(candidate));
+    }
+
+    // --- Multi-valued query keys (match-any, order-independent) ---
+
+    @Test
+    public void multiValuedQueryIsOrderIndependent() {
+        for (final String[] modalities : Arrays.asList(
+                new String[]{"MR", "CT"}, new String[]{"CT", "MR"})) {
+            final Attributes query = new Attributes();
+            query.setString(Tag.QueryRetrieveLevel, VR.CS, "SERIES");
+            query.setString(Tag.Modality, VR.CS, modalities);
+
+            assertTrue(DicomMatchUtils.matchesQuery(query).test(series("MR")));
+            assertTrue(DicomMatchUtils.matchesQuery(query).test(series("CT")));
+            assertFalse(DicomMatchUtils.matchesQuery(query).test(series("PT")));
+        }
+    }
+
+    @Test
+    public void multiValuedQueryAgainstMultiValuedCandidate() {
+        final Attributes query = new Attributes();
+        query.setString(Tag.QueryRetrieveLevel, VR.CS, "STUDY");
+        query.setString(Tag.ModalitiesInStudy, VR.CS, "MR", "PT");
+
+        final Attributes candidate = new Attributes();
+        candidate.setString(Tag.ModalitiesInStudy, VR.CS, "CT", "PT");
+
+        // match-any: PT is shared, MR is not required
+        assertTrue(DicomMatchUtils.matchesQuery(query).test(candidate));
+    }
+
+    @Test
+    public void multiValuedQueryAppliesWildcardsPerValue() {
+        assertTrue(DicomMatchUtils.matchesAnyValue(Tag.PatientName, VR.PN,
+                new String[]{"JONES", "SM*"}, new String[]{"SMITH"}));
+        assertFalse(DicomMatchUtils.matchesAnyValue(Tag.PatientName, VR.PN,
+                new String[]{"JONES", "BR*"}, new String[]{"SMITH"}));
+    }
+
+    @Test
+    public void multiValuedQueryIgnoresEmptyValues() {
+        // "\MR": the empty value is ignored, not universal
+        assertFalse(DicomMatchUtils.matchesAnyValue(Tag.Modality, VR.CS,
+                new String[]{"", "MR"}, new String[]{"CT"}));
+        assertTrue(DicomMatchUtils.matchesAnyValue(Tag.Modality, VR.CS,
+                new String[]{"", "MR"}, new String[]{"MR"}));
+        // all empty: universal
+        assertTrue(DicomMatchUtils.matchesAnyValue(Tag.Modality, VR.CS,
+                new String[]{"", ""}, null));
+    }
+
+    @Test
+    public void multiValuedQueryWithLoneStarIsUniversal() {
+        assertTrue(DicomMatchUtils.matchesAnyValue(Tag.Modality, VR.CS,
+                new String[]{"MR", "*"}, null));
+    }
+
+    @Test
+    public void multiValuedDateRangesMatchAny() {
+        final String[] ranges = {"20200101-20200131", "20210101-"};
+        assertTrue(DicomMatchUtils.matchesAnyValue(Tag.StudyDate, VR.DA,
+                ranges, new String[]{"20200115"}));
+        assertTrue(DicomMatchUtils.matchesAnyValue(Tag.StudyDate, VR.DA,
+                ranges, new String[]{"20220301"}));
+        assertFalse(DicomMatchUtils.matchesAnyValue(Tag.StudyDate, VR.DA,
+                ranges, new String[]{"20200601"}));
+    }
+
+    @Test
+    public void nonEmptyValuesDropsNullAndEmpty() {
+        assertEquals(Arrays.asList("A", "B"), DicomMatchUtils.nonEmptyValues(
+                new String[]{"A", "", null, "B"}));
+        assertTrue(DicomMatchUtils.nonEmptyValues(null).isEmpty());
+    }
+
+    private static Attributes series(final String modality) {
+        final Attributes candidate = new Attributes();
+        candidate.setString(Tag.Modality, VR.CS, modality);
+        return candidate;
     }
 
     // --- Full Attributes matching ---

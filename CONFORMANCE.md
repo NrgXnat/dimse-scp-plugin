@@ -449,11 +449,19 @@ by the SCP are returned with zero length.
   hold multiple values — notably Modalities in Study (0008,0061)
   — a single query value matches if any of the study's values
   matches it (for example, a `PT` query matches a study that
-  contains both CT and PT). Matching a multi-valued *query* key
-  with logical-AND semantics (PS3.4 C.2.2.2.8, e.g. `CT\PT` to
-  require both) needs Extended Negotiation, which is not
-  supported; only the first value of a multi-valued query key is
-  considered.
+  contains both CT and PT).
+- **Multiple values in a query key:** Extended Negotiation of
+  Multiple Value Matching (PS3.4 C.2.2.2.8) is not supported,
+  and without it the semantics of multiple values in a Key
+  Attribute are undefined (C.2.2.2.8 Note 4). This SCP matches
+  an entity if *any* query value matches any of its values, so
+  `MR\CT` and `CT\MR` return the same entities: series of either
+  modality. Each value is matched with the rules above (for
+  example, `SM*\JONES` or two date ranges). Zero-length values
+  in the list are ignored; a value of `*` makes the key
+  universal. This differs from negotiated Multiple Value
+  Matching, which would require every query value to match.
+  Lists of UIDs follow UID List Matching above.
 - **Relational queries** are not supported.
 
 ### 5.6 C-FIND Status Codes

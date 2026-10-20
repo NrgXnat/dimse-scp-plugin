@@ -196,13 +196,13 @@ The four levels' return-attribute assembly is spread across
 #### 5.3.1 PATIENT Level
 
 Row mapper: `query/impl/DimseDataAccess.searchPatients`
-(`query/impl/DimseDataAccess.java:191-220`).
+(`query/impl/DimseDataAccess.java:206-235`).
 
 - `PatientID` and `PatientName` both set from the same
-  `subject_label` column (`:203-204`) — see §5.7.
+  `subject_label` column (`:218-219`) — see §5.7.
 - Counts (studies / series / instances):
-  `query/impl/DimseDataAccess.java:213-215`.
-- Gender / DOB: `:206-210` (see §5.8).
+  `query/impl/DimseDataAccess.java:228-230`.
+- Gender / DOB: `:221-225` (see §5.8).
 
 SQL: `src/main/resources/sql/search-patients.sql`. The
 per-subject sub-query joining `xnat_subjectassessordata`,
@@ -214,29 +214,29 @@ computes all three counts in a single scan
 #### 5.3.2 STUDY Level
 
 Row mapper: `query/impl/DimseDataAccess.mapStudyRow`
-(`query/impl/DimseDataAccess.java:117-147`), invoked by
-`searchStudies` (`:59-69`).
+(`query/impl/DimseDataAccess.java:134-164`), invoked by
+`searchStudies` (`:61-71`).
 
 Notable attribute mappings:
 
 | Conformance attribute | Source column               | Line    |
 |-----------------------|-----------------------------|---------|
-| Study Instance UID    | `uid`                       | `:121`  |
-| Study Date            | `date`                      | `:122`  |
-| Study Time            | `time`                      | `:123`  |
-| Accession Number      | `exptid` (session ID)       | `:124`  |
-| Study ID              | `exptid`                    | `:125`  |
-| Patient Name          | `experiment_label`          | `:126`  |
-| Patient ID            | `subject_label`             | `:127`  |
-| Study Description     | project ID                  | `:128`  |
-| Modalities in Study   | `modalities` split on `\`   | `:130-133` |
-| # Related Series      | `scan_count`                | `:135`  |
-| # Related Instances   | `file_count`                | `:136`  |
+| Study Instance UID    | `uid`                       | `:138`  |
+| Study Date            | `date`                      | `:139`  |
+| Study Time            | `time`                      | `:140`  |
+| Accession Number      | `exptid` (session ID)       | `:141`  |
+| Study ID              | `exptid`                    | `:142`  |
+| Patient Name          | `experiment_label`          | `:143`  |
+| Patient ID            | `subject_label`             | `:144`  |
+| Study Description     | project ID                  | `:145`  |
+| Modalities in Study   | `modalities` split on `\`   | `:147-150` |
+| # Related Series      | `scan_count`                | `:152`  |
+| # Related Instances   | `file_count`                | `:153`  |
 
 Modalities are aggregated in SQL (`string_agg` with `E'\\'`
 separator) at `sql/search-studies.sql:35-48` and split on the
 Java side using `modalities.split("\\\\")` at
-`query/impl/DimseDataAccess.java:133`.
+`query/impl/DimseDataAccess.java:150`.
 
 Shared-into-project sessions are included by the
 `project_experiments` CTE
@@ -247,7 +247,7 @@ Shared-into-project sessions are included by the
 #### 5.3.3 SERIES Level
 
 Row mapper: `query/impl/DimseDataAccess.searchSeries`
-(`query/impl/DimseDataAccess.java:157-182`).
+(`query/impl/DimseDataAccess.java:174-197`).
 
 SQL: `sql/search-series.sql`. The join scopes results to the
 provided Study UID plus the requested project (or a share into
@@ -289,10 +289,10 @@ than by SQL:
 ### 5.4 Return Key Handling
 
 `DimseDataAccess.copyReturnKeys` at
-`query/impl/DimseDataAccess.java:439-446`: iterates the query
+`query/impl/DimseDataAccess.java:540-547`: iterates the query
 tags and adds a `setNull` for any tag not already present in the
 result, using the VR from the query (or `LO` as fallback). Called
-from every row mapper (`:145`, `:179`, `:217`) and from
+from every row mapper (`:162`, `:194`, `:232`) and from
 `XnatDicomQueryService.catalogEntryToAttributes`
 (`query/impl/XnatDicomQueryService.java:170`).
 
@@ -335,78 +335,105 @@ Matching happens on two sides: indexed keys are pushed to SQL by
 
 **Java side** — `query/DicomMatchUtils.java`:
 
-- `matchesQuery` (`:38-46`) iterates the query's tags,
+- `matchesQuery` (`:40-48`) iterates the query's tags,
   skipping `QueryRetrieveLevel` and `SpecificCharacterSet`,
-  and requires every remaining key to match. UI-VR keys go to
-  `matchesUidList` with *all* query values (`getStrings`); every
-  other VR goes to `matchesAnyValue` with the first query value.
-- `matchesUidList` (`:222-234`) implements List of UID Matching
+  and requires every remaining key to match. Every key is read with
+  `getStrings`, so all query values are used: UI-VR keys go to
+  `matchesUidList`, every other VR to `matchesAnyValue`.
+- `matchesUidList` (`:247-259`) implements List of UID Matching
   (PS3.4 C.2.2.2.2): the candidate matches if any of its values
   exactly equals any query UID; an absent or
   all-empty query is universal. dcm4che has already split the
   backslash-delimited list. Applies to every UI key, so the SQL
   `IN (:uidList)` push-down and the post-filter agree.
-- `matchesAnyValue` (`:66-78`) matches the single query value
-  against *all* of the candidate's values (`candidate.getStrings`),
-  succeeding if any matches. This lets a single-value query on a
-  multi-valued attribute — Modalities in Study (0008,0061) — match
-  when the study includes that value (conformance §5.5); only the
-  first *query* value is used (no PS3.4 C.2.2.2.8 multi-value keys).
-- `matchesValue` (`:90-114`) dispatches by VR:
+- `matchesAnyValue` (`:75-88`) is match-any in both directions:
+  the candidate matches if any query value matches any of the
+  candidate's values (`candidate.getStrings`). One query value
+  against a multi-valued attribute — Modalities in Study
+  (0008,0061) — matches when the study includes that value; a
+  multi-valued query key (`MR\CT`) matches either value, so value
+  order cannot change the result. PS3.4 C.2.2.2.8 Note 4 leaves
+  multiple query values undefined without Extended Negotiation,
+  which we do not offer; negotiated Multiple Value Matching would
+  be match-all, so do not "upgrade" this without negotiating it.
+  Query values come from `nonEmptyValues` (`:98-103`), which drops
+  zero-length values; if none remain, or any value is a lone `*`,
+  the key is universal and matches even an absent candidate
+  (`:79-81`).
+- `matchesValue` (`:115-139`) dispatches by VR:
   - Empty query value, or one made only of `*` (checked by
-    `isUniversalWildcard`, `:138-140`) → universal match
-    (`:93-95`). PS3.4 C.2.2.2.4: `*` matches any sequence
+    `isUniversalWildcard`, `:163-165`) → universal match
+    (`:118-120`). PS3.4 C.2.2.2.4: `*` matches any sequence
     including a zero-length value, so a lone `*` must also match
     empty and absent values; it is tested before the
-    empty-candidate rejection below. `matchesAnyValue` applies the
-    same test before rejecting an absent candidate (`:69-71`).
+    empty-candidate rejection below.
   - Empty candidate against any other non-empty query → no match
-    (`:96-98`).
+    (`:121-123`).
   - `VR.UI` → exact single-UID comparison
-    (`:100-102`); `matchesQuery` never reaches this for UI keys,
+    (`:125-127`); `matchesQuery` never reaches this for UI keys,
     which use `matchesUidList`.
   - `VR.DA` / `VR.DT` / `VR.TM` → `matchesDateRange` when
-    a `-` is present (`:103-107`, `:199-208`).
-  - Wildcards → `matchesWildcard` (`:108-110`, `:157-161`) via a
-    regex from `wildcardToRegex` (`:169-192`), compiled with
+    a `-` is present (`:128-132`, `:224-233`).
+  - Wildcards → `matchesWildcard` (`:133-135`, `:182-186`) via a
+    regex from `wildcardToRegex` (`:194-217`), compiled with
     `CASE_INSENSITIVE`.
   - Otherwise a case-insensitive exact match
-    (`equalsIgnoreCase`, `:111-113`) — for every VR, not only PN
+    (`equalsIgnoreCase`, `:136-138`) — for every VR, not only PN
     (R4).
 
 **SQL side** — `query/impl/DimseDataAccess.java`. Filters are
-appended as ` AND …` by `buildStudyQuery` (`:80-86`) and
-`buildPatientQuery` (`:97-102`) and bind to a top-level `WHERE` in
-each base query: `search-studies.sql` ends with a `WHERE TRUE`
-anchor and `search-patients.sql` parenthesizes its project-scope
-disjunction, so the filters restrict rows rather than attaching to
-a `LEFT JOIN … ON`. (`search-series.sql` was already correct.)
+appended as ` AND …` by `buildStudyQuery` (`:82-88`),
+`buildSeriesQuery` (`:98-103`) and `buildPatientQuery`
+(`:114-119`) and bind to a top-level `WHERE` in each base query:
+`search-studies.sql` ends with a `WHERE TRUE` anchor and
+`search-patients.sql` parenthesizes its project-scope disjunction,
+so the filters restrict rows rather than attaching to a
+`LEFT JOIN … ON`. (`search-series.sql` was already correct.)
 
-- `addStudyFilters` (`:224-232`): StudyInstanceUID, StudyDate,
+- `addStudyFilters` (`:239-247`): StudyInstanceUID, StudyDate,
   AccessionNumber, PatientID, PatientName.
-- `addSeriesFilters` (`:236-244`): SeriesInstanceUID, Modality
-  (reverse-mapped PT→PET via `dicomToXnatModality`; see §5.9),
-  SeriesNumber.
-- `addPatientFilters` (`:248-255`): PatientID, PatientName.
-- `addUidFilter` (`:263-281`): single UID → `= :uid`; list →
+- `addSeriesFilters` (`:251-261`): SeriesInstanceUID, Modality
+  (each value reverse-mapped PT→PET via `dicomToXnatModality`;
+  see §5.9), SeriesNumber.
+- `addPatientFilters` (`:265-272`): PatientID, PatientName.
+- `addUidFilter` (`:280-298`): single UID → `= :uid`; list →
   `IN (:uidList)` (UIDs matched exactly).
-- `addStringFilter` — `:289-296` (by tag) delegates to the
-  explicit-value overload `:306-317`, which emits
-  `ILIKE :param` with the value routed through
-  `DicomMatchUtils.toSqlLike` (`:244-267`) (R4). A value with no
+- `addStringFilter` — `:307-315` (by tag) passes all non-empty
+  values to the list overload `:326-344`, which emits
+  `ILIKE :param` per value with the value routed through
+  `DicomMatchUtils.toSqlLike` (`:269-292`) (R4). A value with no
   wildcards is a case-insensitive exact match; the overload lets
-  `addSeriesFilters` pass the reverse-mapped Modality. An empty
-  value, or one made only of `*`, adds no predicate (`:311-313`):
-  `ILIKE '%'` would drop rows where the column is NULL (for
-  example `psl.subject_label`), contradicting universal matching.
-- `addDateFilter` (`:323-364`): range or exact. Each bound is
-  validated with `DicomMatchUtils.isValidDicomDate` (strict
-  `uuuuMMdd` via `LocalDate`); a malformed bound is skipped and
-  logged (so an out-of-range value like `20160732` cannot crash
-  the query). Valid bounds are converted to `YYYY-MM-DD`
-  (`dicomDateToIso`, `:301-308`) and compared as
-  `CAST(:param AS DATE)` so the `date` column is not compared
-  against a bound string.
+  `addSeriesFilters` pass the reverse-mapped Modality values. If
+  any value is made only of `*`, no predicate is added
+  (`:334-336`): `ILIKE '%'` would drop rows where the column is
+  NULL (for example `psl.subject_label`), contradicting universal
+  matching.
+- `addDateFilter` (`:352-362`): one predicate per value, from
+  `datePredicate` (`:374-404`; range or exact) and `dateBound`
+  (`:411-428`). Each bound is validated with
+  `DicomMatchUtils.isValidDicomDate` (strict `uuuuMMdd` via
+  `LocalDate`); a malformed bound is skipped and logged (so an
+  out-of-range value like `20160732` cannot crash the query), and
+  a value with no valid bound restricts nothing. Valid bounds are
+  converted to `YYYY-MM-DD` (`dicomDateToIso`, `:326-333` in
+  `DicomMatchUtils`) and compared as `CAST(:param AS DATE)` so the
+  `date` column is not compared against a bound string.
+- Multi-valued keys: both filters hand their per-value predicates
+  to `appendAnyOf` (`:445-457`). One predicate is appended as is,
+  with the plain parameter names (`:name`, `:dateStart`); several
+  are parenthesized and ORed, with an index suffix on each name
+  (`indexSuffix`, `:463-465`; `:modality0`, `:modality1`). If any
+  value restricts nothing (a lone `*`, an invalid date), the whole
+  key is universal and nothing is appended.
+
+> **Regression hazard.** The SQL push-down must return a superset
+> of what `matchesAnyValue` accepts, because the post-filter can
+> only remove rows. Reading only the first value of a key in SQL
+> (`keys.getString(tag)`) would silently drop entities that match a
+> later value. Covered by `stringFilterMultipleValuesOrderIndependent`,
+> `seriesQueryMapsEachModalityValue` and `dateFilterMultipleValuesOred`
+> in `DimseDataAccessTest`, and the `multiValuedQuery*` cases in
+> `DicomMatchUtilsTest`.
 
 Note the two-layer arrangement: even for SQL-pushed keys, the
 Java `matchesQuery` filter runs afterwards
@@ -435,18 +462,18 @@ All handled inside the SQL row mappers, with no additional
 translation layer:
 
 - **Patient Name @ STUDY** = `experiment_label` (session label):
-  `query/impl/DimseDataAccess.java:126`.
+  `query/impl/DimseDataAccess.java:143`.
 - **Patient Name @ PATIENT** = `subject_label` (same column as
-  Patient ID): `query/impl/DimseDataAccess.java:203-204`.
+  Patient ID): `query/impl/DimseDataAccess.java:218-219`.
 - **Patient ID @ STUDY** = subject label within the queried
   project, from the `project_experiments` / subject-label
   sub-select in `sql/search-studies.sql:5-15, 69-79`; column
-  mapped at `query/impl/DimseDataAccess.java:127`.
+  mapped at `query/impl/DimseDataAccess.java:144`.
 - **Accession Number** = `exptid` (XNAT session ID):
-  `query/impl/DimseDataAccess.java:124`.
-- **Study ID** = `exptid`: `query/impl/DimseDataAccess.java:125`.
+  `query/impl/DimseDataAccess.java:141`.
+- **Study ID** = `exptid`: `query/impl/DimseDataAccess.java:142`.
 - **Study Description** = the XNAT project ID:
-  `query/impl/DimseDataAccess.java:128` sets it from the
+  `query/impl/DimseDataAccess.java:145` sets it from the
   `projectId` parameter of `mapStudyRow`. This matches the
   XNAT DICOMweb plugin (`XnatDicomServiceImpl`, Study
   Description = project ID). Reconciled under R1
@@ -455,13 +482,13 @@ translation layer:
   conformance statement described it as the session note.
 - **Referring Physician Name** = always empty — not set by the
   row mapper, so `copyReturnKeys`
-  (`query/impl/DimseDataAccess.java:439-446`) emits a zero-length
+  (`query/impl/DimseDataAccess.java:540-547`) emits a zero-length
   value if the SCU requested it.
 
 ### 5.8 Gender Mapping
 
 `query/impl/DimseDataAccess.genderToDicomSex`
-(`query/impl/DimseDataAccess.java:394-405`).
+(`query/impl/DimseDataAccess.java:495-506`).
 
 - Blank / null → `Optional.empty()` (not included in response).
 - `m` / `male` (case-insensitive) → `M`.
@@ -471,17 +498,17 @@ translation layer:
 ### 5.9 Modality Mapping
 
 - On the row-mapper side, `dicomModality`
-  (`query/impl/DimseDataAccess.java:410-420`) maps `PET` → `PT`
+  (`query/impl/DimseDataAccess.java:511-521`) maps `PET` → `PT`
   and truncates values longer than 16 characters. Used by
-  `searchSeries` at `:174`.
+  `searchSeries` at `:189`.
 - On the SQL side (STUDY level aggregation), the same `PET`→`PT`
   and length-16 truncation appears inside
   `sql/search-studies.sql:35-48` (in the `scan_modalities`
   CTE) before the values are `string_agg`ed and returned as the
   `modalities` column.
 - **Reverse mapping for matching (R3).** `dicomToXnatModality`
-  (`query/impl/DimseDataAccess.java:431-433`) maps a query value
-  of `PT` back to `PET`; `addSeriesFilters` (`:236-244`) applies
+  (`query/impl/DimseDataAccess.java:532-534`) maps a query value
+  of `PT` back to `PET`; `addSeriesFilters` (`:251-261`) applies
   it before building the SERIES `Modality` filter, so a query
   using the DICOM code `PT` matches scans whose XNAT modality is
   `PET`. Other values (and wildcards) pass through unchanged.
@@ -835,7 +862,7 @@ Previously-known deviation, now resolved:
 - **Study Description** — earlier drafts emitted a literal empty
   string while §5.7 claimed the XNAT session note. Reconciled
   under R1 (`CONFORMANCE-RECONCILIATION-PLAN.md`) on 2026-07-23:
-  `query/impl/DimseDataAccess.java:128` now sets the project ID,
+  `query/impl/DimseDataAccess.java:145` now sets the project ID,
   and §0 / §5.3.2 / §5.7 of the conformance statement were
   updated to match.
 

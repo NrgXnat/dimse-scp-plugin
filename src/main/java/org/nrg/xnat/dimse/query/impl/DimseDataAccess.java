@@ -22,8 +22,10 @@ import java.sql.SQLException;
 import java.text.SimpleDateFormat;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 import java.util.stream.Stream;
 
 /**
@@ -82,6 +84,21 @@ public class DimseDataAccess {
         final StringBuilder sql = new StringBuilder(studySql);
         addStudyFilters(sql, params, keys);
         sql.append(" ORDER BY e.date, e.time, e.id");
+        return sql.toString();
+    }
+
+    /**
+     * Assembles the SERIES-level query: base SQL plus the pushed
+     * filters. Package-private so tests can assert the filters.
+     *
+     * @param keys   the C-FIND query keys
+     * @param params parameter source populated with the bound values
+     * @return the assembled SQL
+     */
+    String buildSeriesQuery(final Attributes keys,
+                            final MapSqlParameterSource params) {
+        final StringBuilder sql = new StringBuilder(seriesSql);
+        addSeriesFilters(sql, params, keys);
         return sql.toString();
     }
 
@@ -161,12 +178,10 @@ public class DimseDataAccess {
         params.addValue("projectId", projectId);
         params.addValue("studyUid", studyUid);
 
-        final StringBuilder sql = new StringBuilder(seriesSql);
-        addSeriesFilters(sql, params, keys);
-
+        final String sql = buildSeriesQuery(keys, params);
         log.trace("Series query SQL: {}", sql);
 
-        return getTemplate().query(sql.toString(), params, (rs, rowNum) -> {
+        return getTemplate().query(sql, params, (rs, rowNum) -> {
             final Attributes attrs = new Attributes();
             attrs.setString(Tag.QueryRetrieveLevel, VR.CS, "SERIES");
             attrs.setString(Tag.StudyInstanceUID, VR.UI, studyUid);
@@ -238,7 +253,9 @@ public class DimseDataAccess {
                                   final Attributes keys) {
         addUidFilter(sql, params, keys, Tag.SeriesInstanceUID, "sc.uid");
         addStringFilter(sql, params,
-                dicomToXnatModality(keys.getString(Tag.Modality)),
+                DicomMatchUtils.nonEmptyValues(keys.getStrings(Tag.Modality)).stream()
+                        .map(DimseDataAccess::dicomToXnatModality)
+                        .toList(),
                 "sc.modality", "modality");
         addStringFilter(sql, params, keys, Tag.SeriesNumber, "sc.id", "seriesNumber");
     }
@@ -284,7 +301,8 @@ public class DimseDataAccess {
      * Adds a case-insensitive string filter for the given tag,
      * translating DICOM wildcards ({@code *}, {@code ?}) to a SQL
      * {@code ILIKE} pattern. A value with no wildcards becomes a
-     * case-insensitive exact match.
+     * case-insensitive exact match. A multi-valued key matches if any
+     * value matches, as in {@link DicomMatchUtils#matchesAnyValue}.
      */
     void addStringFilter(final StringBuilder sql,
                                  final MapSqlParameterSource params,
@@ -292,75 +310,158 @@ public class DimseDataAccess {
                                  final int tag,
                                  final String column,
                                  final String paramName) {
-        addStringFilter(sql, params, keys.getString(tag), column, paramName);
+        addStringFilter(sql, params,
+                DicomMatchUtils.nonEmptyValues(keys.getStrings(tag)), column, paramName);
     }
 
     /**
-     * Adds a case-insensitive string filter for an explicit value.
-     * Used where the query value needs preprocessing before matching
-     * (e.g. the {@code PT} to {@code PET} Modality reverse mapping in
-     * {@link #addSeriesFilters}). A value of only {@code *} adds no
-     * predicate: it is universal matching, and {@code ILIKE '%'} would
-     * wrongly drop rows where the column is NULL.
+     * Adds a case-insensitive string filter for explicit values. Used
+     * where the query values need preprocessing before matching (e.g.
+     * the {@code PT} to {@code PET} Modality reverse mapping in
+     * {@link #addSeriesFilters}). Several values are ORed. Empty values
+     * are ignored; if none remain, or any value is only {@code *}, no
+     * predicate is added: that is universal matching, and
+     * {@code ILIKE '%'} would wrongly drop rows where the column is NULL.
      */
     void addStringFilter(final StringBuilder sql,
                                  final MapSqlParameterSource params,
-                                 final String value,
+                                 final List<String> values,
                                  final String column,
                                  final String paramName) {
-        if (StringUtils.isEmpty(value) || DicomMatchUtils.isUniversalWildcard(value)) {
+        final List<String> patterns = values.stream()
+                .filter(StringUtils::isNotEmpty)
+                .toList();
+        if (patterns.stream().anyMatch(DicomMatchUtils::isUniversalWildcard)) {
             return;
         }
-        sql.append(" AND ").append(column)
-                .append(" ILIKE :").append(paramName);
-        params.addValue(paramName, DicomMatchUtils.toSqlLike(value));
+        appendAnyOf(sql, params, IntStream.range(0, patterns.size())
+                .mapToObj(i -> {
+                    final String name = paramName + indexSuffix(i, patterns.size());
+                    return Optional.of(new SqlPredicate(column + " ILIKE :" + name,
+                            Map.of(name, DicomMatchUtils.toSqlLike(patterns.get(i)))));
+                })
+                .toList());
     }
 
     /**
      * Adds a date-valued filter. Supports exact date, date ranges
-     * (YYYYMMDD-YYYYMMDD), and open-ended ranges.
+     * (YYYYMMDD-YYYYMMDD), and open-ended ranges. A multi-valued key
+     * matches if any value matches. An invalid date or range bound
+     * places no restriction on the column.
      */
     void addDateFilter(final StringBuilder sql,
                                final MapSqlParameterSource params,
                                final Attributes keys,
                                final int tag,
                                final String column) {
-        final String value = keys.getString(tag);
-        if (StringUtils.isEmpty(value)) {
-            return;
-        }
-        if (DicomMatchUtils.isDateRange(value)) {
-            final int dash = value.indexOf('-');
-            final String start = value.substring(0, dash);
-            final String end = value.substring(dash + 1);
-            if (!start.isEmpty()) {
-                if (DicomMatchUtils.isValidDicomDate(start)) {
-                    sql.append(" AND ").append(column)
-                            .append(" >= CAST(:dateStart AS DATE)");
-                    params.addValue("dateStart", DicomMatchUtils.dicomDateToIso(start));
-                } else {
-                    log.warn("Ignoring invalid lower date bound '{}' for tag {}",
-                            start, Integer.toHexString(tag));
-                }
+        final List<String> values = DicomMatchUtils.nonEmptyValues(keys.getStrings(tag));
+        appendAnyOf(sql, params, IntStream.range(0, values.size())
+                .mapToObj(i -> datePredicate(values.get(i), tag, column,
+                        indexSuffix(i, values.size())))
+                .toList());
+    }
+
+    /**
+     * Builds the predicate for one DA query value.
+     *
+     * @param value  a non-empty DA query value (exact date or range)
+     * @param tag    the DICOM tag, for logging
+     * @param column the SQL column
+     * @param suffix appended to parameter names to keep them unique
+     * @return the predicate, or empty if the value places no
+     *         restriction (an invalid date, or a range with no valid bound)
+     */
+    private static Optional<SqlPredicate> datePredicate(final String value,
+                                                        final int tag,
+                                                        final String column,
+                                                        final String suffix) {
+        if (!DicomMatchUtils.isDateRange(value)) {
+            if (DicomMatchUtils.isValidDicomDate(value)) {
+                final String name = "dateExact" + suffix;
+                return Optional.of(new SqlPredicate(
+                        column + " = CAST(:" + name + " AS DATE)",
+                        Map.of(name, DicomMatchUtils.dicomDateToIso(value))));
             }
-            if (!end.isEmpty()) {
-                if (DicomMatchUtils.isValidDicomDate(end)) {
-                    sql.append(" AND ").append(column)
-                            .append(" <= CAST(:dateEnd AS DATE)");
-                    params.addValue("dateEnd", DicomMatchUtils.dicomDateToIso(end));
-                } else {
-                    log.warn("Ignoring invalid upper date bound '{}' for tag {}",
-                            end, Integer.toHexString(tag));
-                }
-            }
-        } else if (DicomMatchUtils.isValidDicomDate(value)) {
-            sql.append(" AND ").append(column)
-                    .append(" = CAST(:dateExact AS DATE)");
-            params.addValue("dateExact", DicomMatchUtils.dicomDateToIso(value));
-        } else {
             log.warn("Ignoring invalid date '{}' for tag {}",
                     value, Integer.toHexString(tag));
+            return Optional.empty();
         }
+        final int dash = value.indexOf('-');
+        final List<SqlPredicate> bounds = Stream.of(
+                        dateBound(value.substring(0, dash), ">=", "dateStart" + suffix,
+                                "lower", tag, column),
+                        dateBound(value.substring(dash + 1), "<=", "dateEnd" + suffix,
+                                "upper", tag, column))
+                .flatMap(Optional::stream)
+                .toList();
+        if (bounds.isEmpty()) {
+            return Optional.empty();
+        }
+        return Optional.of(new SqlPredicate(
+                bounds.stream().map(SqlPredicate::sql).collect(Collectors.joining(" AND ")),
+                bounds.stream().flatMap(b -> b.params().entrySet().stream())
+                        .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue))));
+    }
+
+    /**
+     * Builds the predicate for one bound of a DA range.
+     *
+     * @return the predicate, or empty if the bound is omitted or invalid
+     */
+    private static Optional<SqlPredicate> dateBound(final String bound,
+                                                    final String operator,
+                                                    final String name,
+                                                    final String which,
+                                                    final int tag,
+                                                    final String column) {
+        if (bound.isEmpty()) {
+            return Optional.empty();
+        }
+        if (!DicomMatchUtils.isValidDicomDate(bound)) {
+            log.warn("Ignoring invalid {} date bound '{}' for tag {}",
+                    which, bound, Integer.toHexString(tag));
+            return Optional.empty();
+        }
+        return Optional.of(new SqlPredicate(
+                column + " " + operator + " CAST(:" + name + " AS DATE)",
+                Map.of(name, DicomMatchUtils.dicomDateToIso(bound))));
+    }
+
+    /**
+     * A SQL predicate fragment and the named parameters it binds.
+     *
+     * @param sql    the predicate, without a leading {@code AND}
+     * @param params the parameter values, by name
+     */
+    private record SqlPredicate(String sql, Map<String, Object> params) {}
+
+    /**
+     * Appends the disjunction of one predicate per query value. A
+     * single predicate is appended as is; several are parenthesized and
+     * ORed. If there are no predicates, or any value places no
+     * restriction (an empty element), nothing is appended: the key is
+     * universal matching.
+     */
+    private static void appendAnyOf(final StringBuilder sql,
+                                    final MapSqlParameterSource params,
+                                    final List<Optional<SqlPredicate>> predicates) {
+        if (predicates.isEmpty() || predicates.stream().anyMatch(Optional::isEmpty)) {
+            return;
+        }
+        final List<SqlPredicate> present = predicates.stream().map(Optional::get).toList();
+        sql.append(" AND ").append(present.size() == 1
+                ? present.get(0).sql()
+                : present.stream().map(p -> "(" + p.sql() + ")")
+                        .collect(Collectors.joining(" OR ", "(", ")")));
+        present.forEach(p -> params.addValues(p.params()));
+    }
+
+    /**
+     * Parameter-name suffix for the value at {@code index}: none for a
+     * single value, so single-valued queries keep their plain names.
+     */
+    private static String indexSuffix(final int index, final int count) {
+        return count == 1 ? "" : String.valueOf(index);
     }
 
     // -- Helpers --

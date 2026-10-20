@@ -11,6 +11,8 @@ import java.time.format.DateTimeParseException;
 import java.time.format.ResolverStyle;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.function.Predicate;
 import java.util.regex.Pattern;
@@ -42,39 +44,62 @@ public final class DicomMatchUtils {
                 .allMatch(tag -> query.getVR(tag) == VR.UI
                         ? matchesUidList(query.getStrings(tag), candidate.getStrings(tag))
                         : matchesAnyValue(tag, query.getVR(tag),
-                                query.getString(tag), candidate.getStrings(tag)));
+                                query.getStrings(tag), candidate.getStrings(tag)));
     }
 
     /**
-     * Tests whether a single query value matches a candidate Attribute
-     * that may hold multiple values. The candidate matches if any one of
-     * its values satisfies {@link #matchesValue}.
+     * Tests whether the values of a query key match a candidate
+     * Attribute, where both may hold multiple values. The candidate
+     * matches if any query value satisfies {@link #matchesValue} against
+     * any one of its values, so the result does not depend on the order
+     * of the query values.
      *
-     * <p>This makes single-value matching against a multi-valued
-     * Attribute — notably Modalities in Study (0008,0061) — succeed when
-     * the study includes the queried value, rather than only when the
-     * first value matches. Matching multi-valued <em>query</em> keys with
-     * logical-AND semantics (PS3.4 C.2.2.2.8) is not implemented; only
-     * the first query value is considered.</p>
+     * <p>A single query value is the one-value case; matching it against
+     * a multi-valued Attribute (notably Modalities in Study (0008,0061))
+     * succeeds when the entity includes the queried value. For several
+     * query values, PS3.4 C.2.2.2.8 Note 4 leaves the semantics undefined
+     * without Extended Negotiation of Multiple Value Matching, which this
+     * SCP does not offer; we use match-any. Negotiated Multiple Value
+     * Matching would instead require every query value to match.</p>
+     *
+     * <p>Zero-length query values are ignored. If none remain, or any
+     * value is a lone {@code *} ({@link #isUniversalWildcard}), the key is
+     * universal matching and matches even an absent candidate.</p>
      *
      * @param tag             the DICOM tag
      * @param vr              the Value Representation
-     * @param queryValue      the (single) query value
+     * @param queryValues     the query values, or null if absent
      * @param candidateValues the candidate's values, or null if absent
      * @return true if the candidate matches
      */
     static boolean matchesAnyValue(final int tag, final VR vr,
-                                   final String queryValue,
+                                   final String[] queryValues,
                                    final String[] candidateValues) {
-        if (StringUtils.isEmpty(queryValue) || isUniversalWildcard(queryValue)) {
+        final List<String> values = nonEmptyValues(queryValues);
+        if (values.isEmpty() || values.stream().anyMatch(DicomMatchUtils::isUniversalWildcard)) {
             return true; // universal match, even for an absent candidate
         }
         if (candidateValues == null || candidateValues.length == 0) {
             return false; // non-empty query cannot match an absent value
         }
-        return Arrays.stream(candidateValues)
-                .anyMatch(candidateValue ->
-                        matchesValue(tag, vr, queryValue, candidateValue));
+        return values.stream().anyMatch(queryValue ->
+                Arrays.stream(candidateValues).anyMatch(candidateValue ->
+                        matchesValue(tag, vr, queryValue, candidateValue)));
+    }
+
+    /**
+     * Returns the non-empty values of a (possibly multi-valued) query
+     * key, in order.
+     *
+     * @param values the values as returned by
+     *               {@link Attributes#getStrings(int)}, or null
+     * @return the non-null, non-empty values; empty if there are none
+     */
+    public static List<String> nonEmptyValues(final String[] values) {
+        return Optional.ofNullable(values).stream()
+                .flatMap(Arrays::stream)
+                .filter(StringUtils::isNotEmpty)
+                .toList();
     }
 
     /**
