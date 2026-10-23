@@ -329,6 +329,9 @@ supported. The following query levels are available:
 | SERIES  | Yes        | Yes      |
 | IMAGE   | Yes        | Yes      |
 
+A PATIENT level query in the Study Root model is rejected with
+status A900H.
+
 ### 5.2 Query/Retrieve Level Matching
 
 The QueryRetrieveLevel attribute (0008,0052) is required in
@@ -336,6 +339,14 @@ all C-FIND requests. The value "INSTANCE" is accepted as a
 synonym for "IMAGE". The value is accepted in any letter case.
 
 ### 5.3 Matching Keys and Return Keys
+
+The tables below list the keys supported at each level. The
+Identifier may also hold the Unique Key of each level above the
+Query/Retrieve level (PS3.4 C.4.1.2.1): Patient ID (Patient Root
+only), Study Instance UID and Series Instance UID. Any other key,
+including a key of another level such as Modality (0008,0060) at
+STUDY level, is ignored: it does not restrict the matches and is not
+returned (PS3.4 C.2.2.1.3).
 
 #### 5.3.1 PATIENT Level
 
@@ -354,6 +365,11 @@ project.
 | Number of Patient Related Instances| (0020,1204)  | —        | O      | Sum of files across scans  |
 
 #### 5.3.2 STUDY Level
+
+In the Patient Root model, Patient Name, Patient Sex and Patient
+Birth Date are PATIENT level keys (PS3.4 Table C.6-1) and are ignored
+at STUDY level; Patient ID is the Unique Key of the PATIENT level.
+The Study Root model has them at STUDY level (PS3.4 Table C.6-5).
 
 | DICOM Attribute                    | Tag          | Matching | Return | XNAT Source                |
 |------------------------------------|--------------|----------|--------|----------------------------|
@@ -374,7 +390,10 @@ project.
 
 #### 5.3.3 SERIES Level
 
-The query must include a Study Instance UID.
+The query must include a Study Instance UID. In the Patient Root
+model, a Patient ID in the query restricts the matches to a study of
+a patient it matches, and each match returns that patient's Patient
+ID; this applies at IMAGE level too.
 
 | DICOM Attribute                      | Tag          | Matching | Return | XNAT Source            |
 |--------------------------------------|--------------|----------|--------|------------------------|
@@ -417,9 +436,10 @@ Instance UID.
 
 ### 5.4 Return Key Handling
 
-All attributes present in the C-FIND Identifier are included
-in each result, per PS3.4 C.2.2.1. Attributes not populated
-by the SCP are returned with zero length.
+Each result includes every key of the C-FIND Identifier that is
+supported at the Query/Retrieve level (see 5.3); a supported key
+that the SCP does not populate is returned with zero length. Keys
+not supported at that level are not returned.
 
 ### 5.5 Matching Semantics
 
@@ -462,7 +482,9 @@ by the SCP are returned with zero length.
   identifying the key: for example `202001`, `20201301-`,
   `103060`, a reversed range, `-`, any wildcard including a lone `*`, and
   `""` (Empty Value Matching is not supported). A zero-length
-  value is still Universal Matching.
+  value is still Universal Matching. Date and Time keys that are
+  not supported at the Query/Retrieve level are ignored (see 5.3)
+  and not validated.
 - **UID List Matching:** Backslash-separated UID values per
   PS3.4 C.2.2.2.2; an entity matches if its UID exactly equals
   any UID in the list. A list is accepted only in the Unique Key
@@ -516,7 +538,7 @@ a failure to look up the study, or to read a series' resource
 catalog, is logged and reads as fewer or no matches rather
 than as C000H. A900H is
 returned when the Query/Retrieve Level is missing or
-unsupported.
+unsupported, including PATIENT level in the Study Root model.
 
 ### 5.7 Non-standard Attribute Mappings
 

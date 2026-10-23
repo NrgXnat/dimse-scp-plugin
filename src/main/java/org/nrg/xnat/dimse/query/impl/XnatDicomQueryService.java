@@ -20,7 +20,9 @@ import org.springframework.dao.DataAccessException;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.function.Supplier;
+import java.util.function.UnaryOperator;
 import java.util.stream.Stream;
 
 /**
@@ -79,7 +81,12 @@ public class XnatDicomQueryService implements DicomQueryService {
 
         log.debug("Querying series in project '{}', study UID '{}'", projectId, studyUid);
 
+        final Optional<UnaryOperator<Attributes>> patient = patientAbove(projectId, studyUid, keys);
+        if (patient.isEmpty()) {
+            return Stream.empty();
+        }
         return query("series", projectId, () -> _dataAccess.searchSeries(projectId, studyUid, keys))
+                .map(patient.get())
                 .filter(DicomMatchUtils.matchesQuery(keys));
     }
 
@@ -130,6 +137,10 @@ public class XnatDicomQueryService implements DicomQueryService {
         log.debug("Querying instances in project '{}', study '{}', series '{}'",
                 projectId, studyUid, seriesUid);
 
+        final Optional<UnaryOperator<Attributes>> patient = patientAbove(projectId, studyUid, keys);
+        if (patient.isEmpty()) {
+            return Stream.empty();
+        }
         final List<XnatImagesessiondata> sessions =
                 XnatImagesessiondata.getXnatImagesessiondatasByField(
                         "xnat:imageSessionData/UID", studyUid, user, false);
@@ -144,7 +155,50 @@ public class XnatDicomQueryService implements DicomQueryService {
                         .filter(scan -> seriesUid.equals(scan.getUid()))
                         .flatMap(scan -> CatalogEntryUtils.scanEntries(scan, session.getProject())))
                 .map(entry -> catalogEntryToAttributes(entry, studyUid, seriesUid, keys))
+                .map(patient.get())
                 .filter(DicomMatchUtils.matchesQuery(keys));
+    }
+
+    /**
+     * Applies the Patient ID above a SERIES or IMAGE level query. In the
+     * Patient Root model the Identifier holds the Patient ID of the
+     * study's patient (PS3.4 C.4.1.2.1), and the hierarchical search finds
+     * matches only under a patient matching it (C.4.1.3.1.1); each match
+     * returns it as a Unique Key of a higher level. Series and instance
+     * records have no Patient ID, so the study is looked up with this key.
+     *
+     * @param projectId the project searched
+     * @param studyUid  the Study Instance UID from the Identifier
+     * @param keys      the Identifier, holding only supported keys
+     * @return a function setting the study's Patient ID on a match, or
+     *         the identity if the Identifier has no Patient ID (as in the
+     *         Study Root model); empty if the study is not under a patient
+     *         matching it, so there are no matches
+     * @throws DicomServiceException with status C000H if the study query
+     *         fails
+     */
+    private Optional<UnaryOperator<Attributes>> patientAbove(final String projectId,
+                                                             final String studyUid,
+                                                             final Attributes keys)
+            throws DicomServiceException {
+        if (!keys.contains(Tag.PatientID)) {
+            return Optional.of(UnaryOperator.identity());
+        }
+        final Attributes studyKeys = new Attributes(2);
+        studyKeys.setString(Tag.StudyInstanceUID, VR.UI, studyUid);
+        studyKeys.addSelected(keys, Tag.PatientID);
+        return query("studies", projectId, () -> _dataAccess.searchStudies(projectId, studyKeys))
+                .filter(DicomMatchUtils.matchesQuery(studyKeys))
+                .map(study -> study.getString(Tag.PatientID, ""))
+                .findFirst()
+                .map(XnatDicomQueryService::withPatientId);
+    }
+
+    private static UnaryOperator<Attributes> withPatientId(final String patientId) {
+        return match -> {
+            match.setString(Tag.PatientID, VR.LO, patientId);
+            return match;
+        };
     }
 
     /**

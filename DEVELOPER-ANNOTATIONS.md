@@ -74,7 +74,7 @@ Called-AE-Title-to-project resolution: `scp/ProjectAeResolver.java:60-80`.
 Rejection paths:
 
 - Unknown AE → `DicomServiceException(Status.UnableToProcess)`
-  from the calling SCP (`scp/XnatCFindScp.java:66-71`,
+  from the calling SCP (`scp/XnatCFindScp.java:70-75`,
   `scp/XnatCGetScp.java:83-87`).
 
 ### 2.3 Sequencing Constraints
@@ -103,7 +103,7 @@ Wildcard AE registration: `scp/DimseScpService.java:223`
 
 At request time, the SCPs read the Called AE Title from the
 association and resolve it:
-- C-FIND: `scp/XnatCFindScp.java:58` + `:66-71`.
+- C-FIND: `scp/XnatCFindScp.java:59` + `:70-75`.
 - C-GET: `scp/XnatCGetScp.java:76` + `:83-87`.
 
 The 16-character AE title limit is a DICOM protocol constraint
@@ -113,7 +113,7 @@ characters are simply unaddressable.
 
 ### 3.3 Calling AE Title Handling
 
-Logged but not otherwise used: `scp/XnatCFindScp.java:59-60`,
+Logged but not otherwise used: `scp/XnatCFindScp.java:60-61`,
 `scp/XnatCGetScp.java:77`. No validation code path exists.
 
 ### 3.4 Presentation Contexts — SCP Role
@@ -153,9 +153,12 @@ The C-FIND SCP is a thin dispatcher; per-level logic is in
 
 ### 5.1 Query Levels
 
-Dispatch: `scp/XnatCFindScp.java:113-130`.
+Dispatch: `scp/XnatCFindScp.java:117-134`.
 `QueryLevel` enum: `query/QueryLevel.java:16-20`; each constant
 carries its level's Unique Key tag (`getUniqueKey`, `:33-35`).
+The Study Root model has no PATIENT level: `QueryKeys.select`
+rejects it with A900H (`query/QueryKeys.java:85-89`), choosing the
+model from the presentation context's abstract syntax.
 
 ### 5.2 Query/Retrieve Level Matching
 
@@ -167,9 +170,14 @@ carries its level's Unique Key tag (`getUniqueKey`, `:33-35`).
 - `INSTANCE` mapped to `IMAGE` (`:88`).
 - Unknown value → `IdentifierDoesNotMatchSOPClass` (`:89-92`).
 
-Then `QueryLevel.requireSingleUidKeysAbove`
+Then `QueryKeys.select` (`query/QueryKeys.java:82-101`, called at
+`scp/XnatCFindScp.java:66`) keeps only the keys supported at the
+level, and every later step — validation, both matching layers,
+and the response — sees only those. See §5.3.
+
+Next, `QueryLevel.requireSingleUidKeysAbove`
 (`query/QueryLevel.java:55-71`, called at
-`scp/XnatCFindScp.java:63`) rejects any Identifier whose UID Unique
+`scp/XnatCFindScp.java:67`) rejects any Identifier whose UID Unique
 Key for a level *above* the query level (Study Instance UID at
 SERIES/IMAGE, Series Instance UID at IMAGE) has more than one
 value. PS3.4 C.4.1.2.1 requires a single value there; only the key
@@ -188,12 +196,14 @@ Element as a related field of Cxxx. Keep the message under 64
 characters; dcm4che truncates the LO Error Comment.
 
 Next, `DateTimeKeys.requireValid` (`query/DateTimeKeys.java:63-73`,
-called at `scp/XnatCFindScp.java:64`) rejects a malformed value in
+called at `scp/XnatCFindScp.java:68`) rejects a malformed value in
 any DA or TM key, the same way: C000H, Offending Element naming the
 key, Error Comment "`<Keyword>` is not a valid DA/TM query value".
-`findMalformed` (`query/DateTimeKeys.java:81-86`) checks every top-level key, not only
-documented matching keys, because `matchesQuery` post-filters on
-every key with a value. Each non-empty value of a multi-valued key
+`findMalformed` (`query/DateTimeKeys.java:81-86`) checks every
+supported key, not only documented matching keys, because
+`matchesQuery` post-filters on every supported key with a value.
+A DA or TM key not supported at the level was dropped by
+`QueryKeys.select` and is not checked. Each non-empty value of a multi-valued key
 must pass; zero-length values are universal and not checked.
 
 - DA: `DicomMatchUtils.parseDateRange` must succeed (§5.5).
@@ -225,6 +235,48 @@ must pass; zero-length values are universal and not checked.
 The four levels' return-attribute assembly is spread across
 `DimseDataAccess` row mappers and one dispatcher in
 `XnatDicomQueryService.findInstances`.
+
+**Supported keys.** `query/QueryKeys.java` holds the keys of each
+level's conformance table (`:32-63`). `supported` (`:111-127`) adds
+the Unique Key of each level above in the model — Patient ID only in
+Patient Root — and Specific Character Set and Query/Retrieve Level.
+The Study Root STUDY level also takes Patient Name, Patient ID,
+Patient Sex and Patient Birth Date (`STUDY_ROOT_PATIENT`, `:52-54`;
+PS3.4 Table C.6-5); in Patient Root they are PATIENT level keys
+(Table C.6-1), and of them only Patient ID may appear below. Any
+other key is ignored (C.2.2.1.3: an Optional Key whose existence is
+not supported "shall not be returned"; C.4.1.2.1 lists what the
+Identifier may hold). Ignoring is needed for matching, not only for
+the response: the post-filter treats a non-empty key absent from
+the record as a mismatch, so a lower-level key such as Modality at
+STUDY level would otherwise match nothing.
+
+> **Regression hazard.** A key added to a row mapper or to the SQL
+> filters is not matched or returned until it is also added to
+> `QueryKeys`, and the conformance table must list it. Conversely,
+> anything that reads the SCU's raw Identifier instead of the
+> selected one (`scp/XnatCFindScp.java:66`) undoes the ignoring:
+> the post-filter would reject every record for an unsupported
+> key. Covered by `QueryKeysTest` and the
+> `unsupportedKeys*` / `studyRootPatientLevelIsRejected` cases in
+> `XnatCFindScpTest`.
+
+**Patient ID above SERIES and IMAGE (Patient Root).** Series and
+instance records have no Patient ID. `XnatDicomQueryService.patientAbove`
+(`query/impl/XnatDicomQueryService.java:180-195`) runs the study
+query with the Study Instance UID and the query's Patient ID; if no
+study matches, the level returns no matches (PS3.4 C.4.1.3.1.1: the
+search goes down a level only under an entity matching that level's
+Unique Key), otherwise each match gets the study's Patient ID
+(`withPatientId`, `:197-202`), so the response carries the Unique
+Key of the higher level and a wildcard query returns the real value.
+Called from `findSeries` (`:84-89`) and `findInstances` (`:140-158`).
+It runs only when the selected keys hold Patient ID, which after
+`QueryKeys.select` means Patient Root. A failed study query is
+C000H like any other (§5.6). Tests: the `patientRoot*`,
+`seriesWithoutPatientIdSkipsStudyLookup` and
+`patientLookupFailureIsUnableToProcess` cases in
+`XnatDicomQueryServiceTest`.
 
 #### 5.3.1 PATIENT Level
 
@@ -291,7 +343,7 @@ study's resources (§5.10).
 `Modality` is passed through `dicomModality` (see §5.9).
 
 The dispatcher rejects a missing Study Instance UID before
-calling the DAO: `query/impl/XnatDicomQueryService.java:75-78`.
+calling the DAO: `query/impl/XnatDicomQueryService.java:77-80`.
 
 #### 5.3.4 IMAGE Level
 
@@ -302,21 +354,21 @@ than by SQL:
 
 - Dispatcher and requirements check:
   `query/impl/XnatDicomQueryService.findInstances`
-  (`query/impl/XnatDicomQueryService.java:114-148`).
-- Session lookup by Study UID: `:133-135` (through the XFT ORM, not
+  (`query/impl/XnatDicomQueryService.java:121-160`).
+- Session lookup by Study UID: `:144-146` (through the XFT ORM, not
   SQL).
-- Project scope: `session.hasProject(projectId)` (`:142`) — the
+- Project scope: `session.hasProject(projectId)` (`:153`) — the
   XNAT core owned-or-shared rule
   (`BaseXnatExperimentdata.hasProject`), consistent with the
   STUDY/SERIES SQL, so every study listed at STUDY level can be
   queried at IMAGE level.
-- Scan enumeration and catalog walk: `:143-145`. Catalogs are
+- Scan enumeration and catalog walk: `:154-156`. Catalogs are
   resolved against the session's owning project
   (`session.getProject()`), not the Called-AE project.
 - Attribute assembly per catalog entry:
   `query/impl/XnatDicomQueryService.catalogEntryToAttributes`
-  (`:179-197`); SOP Class UID pulled from the
-  `SOP_Class_UID` metafield (`:202-208`).
+  (`:233-251`); SOP Class UID pulled from the
+  `SOP_Class_UID` metafield (`:256-262`).
 - Catalog entry streaming: `CatalogEntryUtils.scanEntries`
   (`CatalogEntryUtils.java:57-61`) — delegates to
   `dicomCatalogs` + `catalogEntries`.
@@ -329,7 +381,16 @@ tags and adds a `setNull` for any tag not already present in the
 result, using the VR from the query (or `LO` as fallback). Called
 from every row mapper (`:162`, `:194`, `:232`) and from
 `XnatDicomQueryService.catalogEntryToAttributes`
-(`query/impl/XnatDicomQueryService.java:195`).
+(`query/impl/XnatDicomQueryService.java:249`). The query tags are
+the selected ones (§5.3), so only supported keys are returned.
+
+dcm4che builds each Pending response in `BasicQueryTask.adjust`,
+which copies the match's attributes selected by the task's keys
+(`addSelected`) and then adds a zero-length value for every key the
+match lacks (`supplementEmpty`). The task is therefore built from
+the selected keys (`scp/XnatCFindScp.java:88`); built from the SCU's
+raw Identifier, it would return every key the SCU sent, supported
+or not (checked in the dcm4che-net 5.31.0 bytecode).
 
 **Why empty and not a placeholder.** The zero-length values
 produced here (and the always-empty Referring Physician Name, the
@@ -387,8 +448,9 @@ plugins can answer the same query differently.
 
 **Java side** — `query/DicomMatchUtils.java`:
 
-- `matchesQuery` (`:40-48`) iterates the query's tags,
-  skipping `QueryRetrieveLevel` and `SpecificCharacterSet`,
+- `matchesQuery` (`:40-48`) iterates the query's tags — the keys
+  `QueryKeys.select` kept (§5.3) — skipping `QueryRetrieveLevel`
+  and `SpecificCharacterSet`,
   and requires every remaining key to match. Every key is read with
   `getStrings`, so all query values are used: UI-VR keys go to
   `matchesUidList`, every other VR to `matchesAnyValue`.
@@ -527,7 +589,7 @@ so the filters restrict rows rather than attaching to a
 
 Note the two-layer arrangement: even for SQL-pushed keys, the
 Java `matchesQuery` filter runs afterwards
-(`query/impl/XnatDicomQueryService.java:62, 83, 98`). Both
+(`query/impl/XnatDicomQueryService.java:64, 90, 105`). Both
 layers apply the same case rule, so the Java pass re-checks
 non-pushed keys and the VR-specific semantics SQL does not model
 (date/time ranges, UID lists); it does not need to correct case.
@@ -541,7 +603,7 @@ Patient Names the two layers might disagree; this is not tested.
   `BasicCFindSCP` / `BasicQueryTask` — no code in this plugin
   writes them explicitly.
 - `Status.UnableToProcess` (C000H) on unknown AE:
-  `scp/XnatCFindScp.java:66-71`.
+  `scp/XnatCFindScp.java:70-75`.
 - `Status.UnableToProcess` (C000H) with Offending Element on a
   UID list in a Unique Key above the query level:
   `query/QueryLevel.java:63-70` (§5.2).
@@ -551,23 +613,23 @@ Patient Names the two layers might disagree; this is not tested.
   The `DicomQueryService.find*` methods declare
   `DicomServiceException` (contract in the interface's class
   Javadoc). `XnatDicomQueryService.query`
-  (`query/impl/XnatDicomQueryService.java:161-174`) runs each SQL
+  (`query/impl/XnatDicomQueryService.java:215-228`) runs each SQL
   search and turns a Spring `DataAccessException` into C000H with a
   fixed Error Comment "Query failed", logging the cause at ERROR;
   the cause is not sent to the SCU. The SQL runs eagerly
   (`NamedParameterJdbcTemplate.query` returns a `List`), so the
   failure surfaces inside `find*`, before any Pending response. The
-  SCP passes it on unchanged (`scp/XnatCFindScp.java:80`).
+  SCP passes it on unchanged (`scp/XnatCFindScp.java:84`).
   - Safety net for bugs: any `RuntimeException` from the `find` call
-    (`scp/XnatCFindScp.java:79-83`) or from iterating its stream
-    (`hasMoreMatches` `:90-94`, `nextMatch` `:104-108`) becomes C000H
-    via `queryFailed` (`:141-149`). Needed because dcm4che's
+    (`scp/XnatCFindScp.java:83-87`) or from iterating its stream
+    (`hasMoreMatches` `:94-98`, `nextMatch` `:108-112`) becomes C000H
+    via `queryFailed` (`:145-153`). Needed because dcm4che's
     `BasicQueryTask.run` sends a `DicomServiceException` as the final
     response but sends **no** final response for any other exception.
     An exception while iterating can follow Pending responses.
   - Gap: the IMAGE-level session lookup
     (`XnatImagesessiondata.getXnatImagesessiondatasByField`,
-    `query/impl/XnatDicomQueryService.java:133-135`) catches every
+    `query/impl/XnatDicomQueryService.java:144-146`) catches every
     exception inside XFT, logs it, and returns an empty list, so a
     database failure there reads as no matches. A catalog that fails
     to load is likewise logged and skipped (`CatalogEntryUtils`).
@@ -577,7 +639,7 @@ Patient Names the two layers might disagree; this is not tested.
     `unexpectedFailureWhileIteratingIsUnableToProcess` in
     `XnatCFindScpTest`; `XnatDicomQueryServiceTest`.
 - `Status.IdentifierDoesNotMatchSOPClass` (A900H) on bad level:
-  `scp/XnatCFindScp.java:126-128` and
+  `scp/XnatCFindScp.java:130-132` and
   `query/QueryLevel.java:82-85, :89-92`.
 
 ### 5.7 Non-standard Attribute Mappings
@@ -819,7 +881,7 @@ Transcoding: `scp/XnatCGetScp.createDataWriter`
 No code path validates the Calling AE Title. Service-account
 identity is delegated to `XnatUserProvider` via
 `scp/ProjectAeResolver.java:49-51` and passed into query/retrieve
-methods (`scp/XnatCFindScp.java:73`,
+methods (`scp/XnatCFindScp.java:77`,
 `scp/XnatCGetScp.java:123`).
 
 ### 7.2 Authorization
@@ -846,10 +908,10 @@ only data boundary between projects.
 SLF4J only. `@Slf4j` classes:
 - `scp/DimseScpService.java:35` — start / stop at INFO
   (`:245, :275`).
-- `scp/XnatCFindScp.java:30` — request logging at DEBUG
-  (`:60, :75, :96`), reject at WARN (`:68`), unexpected failure at
-  ERROR (`:144`). Database query failures are logged at ERROR in
-  `query/impl/XnatDicomQueryService.java:168`.
+- `scp/XnatCFindScp.java:31` — request logging at DEBUG
+  (`:61, :79, :100`), reject at WARN (`:72`), unexpected failure at
+  ERROR (`:148`). Database query failures are logged at ERROR in
+  `query/impl/XnatDicomQueryService.java:222`.
 - `scp/XnatCGetScp.java:51` — DEBUG on request / transcoding
   (`:80, :89, :102`), WARN on missing negotiation (`:263-264`).
 - `scp/ProjectAeResolver.java:25` — DEBUG on resolution
@@ -957,7 +1019,7 @@ consequences of the code paths already annotated above:
 The following source files were verified against the conformance
 statement at the date below. Any subsequent re-verification pass
 should start here. File:line references throughout this document
-were re-checked against the code on 2026-10-20.
+were re-checked against the code on 2026-10-22.
 
 - `src/main/java/org/nrg/xnat/dimse/DimsePlugin.java` (the
   preference-aware constructor at `:43-51`)
@@ -973,6 +1035,7 @@ were re-checked against the code on 2026-10-20.
   walk, `:174-235` session lookup, `:237-285` TS
   selection/transcoding)
 - `src/main/java/org/nrg/xnat/dimse/query/QueryLevel.java`
+- `src/main/java/org/nrg/xnat/dimse/query/QueryKeys.java`
 - `src/main/java/org/nrg/xnat/dimse/query/DateTimeKeys.java`
 - `src/main/java/org/nrg/xnat/dimse/query/DicomMatchUtils.java`
 - `src/main/java/org/nrg/xnat/dimse/query/DicomQueryService.java`
@@ -1021,6 +1084,14 @@ C.2.2.2.8 (Multiple Value Matching, Note 4), C.4.1.2.1 (single
 value in each Unique Key above the query level) and Table C.4-1
 (C-FIND failure statuses and their related fields); PS3.5 Table 6.2-1 (DA
 and TM formats, leap second).
+
+**Exception (2026-10-22).** The supported-key text in §5.3 and
+§5.4, and CONFORMANCE §5.1, §5.3 and §5.4, were verified on that
+date against dicom.nema.org/medical/dicom/current/output/: PS3.4
+C.2.2.1.2 (Required Keys), C.2.2.1.3 (Optional Keys: unsupported
+ones are not returned), C.4.1.2.1 (what the Identifier may hold),
+C.4.1.3.1.1 (Hierarchical Search Method) and Tables C.6-1 to C.6-5
+(the keys of each level in the Patient Root and Study Root models).
 All other spec-level claims remain unverified as above.
 
 ---

@@ -167,6 +167,55 @@ public class XnatCFindScpTest {
     }
 
     @Test
+    public void unsupportedKeysAreNotValidatedOrQueried() throws DicomServiceException {
+        when(queryService.findStudies(eq(project), any(), eq(user)))
+                .thenReturn(Stream.empty());
+        final Attributes keys = keysWithLevel("STUDY");
+        keys.setString(Tag.Modality, VR.CS, "CT");
+        keys.setString(Tag.AcquisitionDate, VR.DA, "202001");
+
+        scp.calculateMatches(association, pc, rq, keys);
+
+        final ArgumentCaptor<Attributes> queried = ArgumentCaptor.forClass(Attributes.class);
+        verify(queryService).findStudies(eq(project), queried.capture(), eq(user));
+        assertFalse(queried.getValue().contains(Tag.Modality));
+        assertFalse(queried.getValue().contains(Tag.AcquisitionDate));
+    }
+
+    @Test
+    public void unsupportedKeysAreNotReturned() throws Exception {
+        final Attributes match = new Attributes();
+        match.setString(Tag.StudyInstanceUID, VR.UI, "1.2.3");
+        when(queryService.findStudies(eq(project), any(), eq(user)))
+                .thenReturn(Stream.of(match));
+        final Attributes keys = keysWithLevel("STUDY");
+        keys.setNull(Tag.StudyInstanceUID, VR.UI);
+        keys.setNull(Tag.SOPClassesInStudy, VR.UI);
+
+        scp.calculateMatches(association, pc, rq, keys).run();
+
+        final ArgumentCaptor<Attributes> data = ArgumentCaptor.forClass(Attributes.class);
+        verify(association, atLeastOnce()).writeDimseRSP(eq(pc), any(), data.capture());
+        final Attributes returned = data.getAllValues().get(0);
+        assertEquals("1.2.3", returned.getString(Tag.StudyInstanceUID));
+        assertFalse(returned.contains(Tag.SOPClassesInStudy));
+    }
+
+    @Test
+    public void studyRootPatientLevelIsRejected() throws DicomServiceException {
+        final PresentationContext studyRoot = new PresentationContext(1,
+                UID.StudyRootQueryRetrieveInformationModelFind,
+                UID.ImplicitVRLittleEndian);
+        try {
+            scp.calculateMatches(association, studyRoot, rq, keysWithLevel("PATIENT"));
+            fail("expected DicomServiceException");
+        } catch (final DicomServiceException e) {
+            assertEquals(Status.IdentifierDoesNotMatchSOPClass, e.getStatus());
+        }
+        verify(queryService, never()).findPatients(any(), any(), any());
+    }
+
+    @Test
     public void queryFailureIsPassedOn() throws DicomServiceException {
         final DicomServiceException failure =
                 new DicomServiceException(Status.UnableToProcess, "Query failed");

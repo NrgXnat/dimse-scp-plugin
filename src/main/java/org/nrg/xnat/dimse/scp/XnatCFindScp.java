@@ -14,6 +14,7 @@ import org.nrg.xdat.om.XnatProjectdata;
 import org.nrg.xft.security.UserI;
 import org.nrg.xnat.dimse.query.DateTimeKeys;
 import org.nrg.xnat.dimse.query.DicomQueryService;
+import org.nrg.xnat.dimse.query.QueryKeys;
 import org.nrg.xnat.dimse.query.QueryLevel;
 
 import java.util.Iterator;
@@ -60,8 +61,11 @@ public class XnatCFindScp extends BasicCFindSCP {
         log.debug("C-FIND from {} to {}, keys {}", callingAet, calledAet, keys);
         final QueryLevel level = QueryLevel.fromKeys(keys);
         log.trace("query level {}", level);
-        level.requireSingleUidKeysAbove(keys);
-        DateTimeKeys.requireValid(keys);
+        // Keys not supported at this level are ignored: not validated,
+        // matched or returned.
+        final Attributes supported = QueryKeys.select(pc.getAbstractSyntax(), level, keys);
+        level.requireSingleUidKeysAbove(supported);
+        DateTimeKeys.requireValid(supported);
 
         final XnatProjectdata project = _projectAeResolver.resolve(calledAet)
             .orElseThrow(() -> {
@@ -77,11 +81,11 @@ public class XnatCFindScp extends BasicCFindSCP {
         final String projectId = project.getId();
         final Iterator<Attributes> iter;
         try {
-            iter = find(level, project, keys, user).iterator();
+            iter = find(level, project, supported, user).iterator();
         } catch (final RuntimeException e) {
             throw queryFailed(projectId, level, e);
         }
-        return new BasicQueryTask(as, pc, rq, keys) {
+        return new BasicQueryTask(as, pc, rq, supported) {
             private int _count;
 
             @Override
