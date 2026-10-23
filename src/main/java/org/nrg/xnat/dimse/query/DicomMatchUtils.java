@@ -5,9 +5,18 @@ import org.dcm4che3.data.Attributes;
 import org.dcm4che3.data.Tag;
 import org.dcm4che3.data.VR;
 
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
+import java.time.format.ResolverStyle;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
+import java.util.Optional;
+import java.util.Set;
 import java.util.function.Predicate;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 /**
@@ -32,7 +41,65 @@ public final class DicomMatchUtils {
         return candidate -> null != candidate && IntStream.of(query.tags())
                 .filter(tag -> tag != Tag.QueryRetrieveLevel)
                 .filter(tag -> tag != Tag.SpecificCharacterSet)
-                .allMatch(tag -> matchesValue(tag, query.getVR(tag), query.getString(tag), candidate.getString(tag)));
+                .allMatch(tag -> query.getVR(tag) == VR.UI
+                        ? matchesUidList(query.getStrings(tag), candidate.getStrings(tag))
+                        : matchesAnyValue(tag, query.getVR(tag),
+                                query.getStrings(tag), candidate.getStrings(tag)));
+    }
+
+    /**
+     * Tests whether the values of a query key match a candidate
+     * Attribute, where both may hold multiple values. The candidate
+     * matches if any query value satisfies {@link #matchesValue} against
+     * any one of its values, so the result does not depend on the order
+     * of the query values.
+     *
+     * <p>A single query value is the one-value case; matching it against
+     * a multi-valued Attribute (notably Modalities in Study (0008,0061))
+     * succeeds when the entity includes the queried value. For several
+     * query values, PS3.4 C.2.2.2.8 Note 4 leaves the semantics undefined
+     * without Extended Negotiation of Multiple Value Matching, which this
+     * SCP does not offer; we use match-any. Negotiated Multiple Value
+     * Matching would instead require every query value to match.</p>
+     *
+     * <p>Zero-length query values are ignored. If none remain, or any
+     * value is a lone {@code *} ({@link #isUniversalWildcard}), the key is
+     * universal matching and matches even an absent candidate.</p>
+     *
+     * @param tag             the DICOM tag
+     * @param vr              the Value Representation
+     * @param queryValues     the query values, or null if absent
+     * @param candidateValues the candidate's values, or null if absent
+     * @return true if the candidate matches
+     */
+    static boolean matchesAnyValue(final int tag, final VR vr,
+                                   final String[] queryValues,
+                                   final String[] candidateValues) {
+        final List<String> values = nonEmptyValues(queryValues);
+        if (values.isEmpty() || values.stream().anyMatch(DicomMatchUtils::isUniversalWildcard)) {
+            return true; // universal match, even for an absent candidate
+        }
+        if (candidateValues == null || candidateValues.length == 0) {
+            return false; // non-empty query cannot match an absent value
+        }
+        return values.stream().anyMatch(queryValue ->
+                Arrays.stream(candidateValues).anyMatch(candidateValue ->
+                        matchesValue(tag, vr, queryValue, candidateValue)));
+    }
+
+    /**
+     * Returns the non-empty values of a (possibly multi-valued) query
+     * key, in order.
+     *
+     * @param values the values as returned by
+     *               {@link Attributes#getStrings(int)}, or null
+     * @return the non-null, non-empty values; empty if there are none
+     */
+    public static List<String> nonEmptyValues(final String[] values) {
+        return Optional.ofNullable(values).stream()
+                .flatMap(Arrays::stream)
+                .filter(StringUtils::isNotEmpty)
+                .toList();
     }
 
     /**
@@ -48,29 +115,49 @@ public final class DicomMatchUtils {
     public static boolean matchesValue(final int tag, final VR vr,
                                        final String queryValue,
                                        final String candidateValue) {
-        if (StringUtils.isEmpty(queryValue)) {
-            return true; // universal match
+        if (StringUtils.isEmpty(queryValue) || isUniversalWildcard(queryValue)) {
+            return true; // universal match, even for an empty candidate
         }
         if (StringUtils.isEmpty(candidateValue)) {
             return false; // non-empty query cannot match empty candidate
         }
 
         if (vr == VR.UI) {
-            return matchesUidList(queryValue, candidateValue);
+            return queryValue.equals(candidateValue); // exact
         }
-        if (vr == VR.DA || vr == VR.DT || vr == VR.TM) {
+        if (vr == VR.DA) {
+            return parseDateRange(queryValue)
+                    .orElseThrow(() -> new IllegalArgumentException(
+                            "Malformed DA query value: " + queryValue))
+                    .contains(candidateValue);
+        }
+        if (vr == VR.DT || vr == VR.TM) {
             if (isDateRange(queryValue)) {
                 return matchesDateRange(queryValue, candidateValue);
             }
         }
         if (containsWildcard(queryValue)) {
-            return matchesWildcard(queryValue, candidateValue, vr == VR.PN);
+            return matchesWildcard(queryValue, candidateValue, vr);
         }
-        // Single value exact match
-        if (vr == VR.PN) {
-            return candidateValue.equalsIgnoreCase(queryValue);
-        }
-        return candidateValue.equals(queryValue);
+        return ignoresCase(vr)
+                ? candidateValue.equalsIgnoreCase(queryValue)
+                : candidateValue.equals(queryValue);
+    }
+
+    /**
+     * Tests whether matching on a key of this VR ignores case. Only PN
+     * does: PS3.4 C.2.2.2.1 makes Single Value Matching case-sensitive,
+     * and C.2.2.2.4 makes Wild Card Matching case sensitive except for
+     * PN. For PN, C.2.2.2.1.1 lets an application match case-sensitively
+     * or not; this SCP ignores case. Both matching layers use this rule
+     * (the SQL push-down in {@code DimseDataAccess} emits {@code ILIKE}
+     * only where it holds), so they agree.
+     *
+     * @param vr the key's Value Representation
+     * @return true if matching ignores case
+     */
+    public static boolean ignoresCase(final VR vr) {
+        return vr == VR.PN;
     }
 
     /**
@@ -81,6 +168,22 @@ public final class DicomMatchUtils {
      */
     public static boolean containsWildcard(final String value) {
         return StringUtils.containsAny(value, "*?");
+    }
+
+    /**
+     * Tests whether a query value consists only of {@code *} wildcards.
+     * Per PS3.4 C.2.2.2.4, {@code *} matches any sequence of characters
+     * including a zero-length value, and Wild Card Matching on a value
+     * of {@code *} is equivalent to Universal Matching. Such a value
+     * must therefore match empty and absent candidate values, which
+     * ordinary wildcard matching against a stored value would not.
+     *
+     * @param value the query value to check
+     * @return true if the value is non-empty and every character is
+     *         {@code *}
+     */
+    public static boolean isUniversalWildcard(final String value) {
+        return StringUtils.isNotEmpty(value) && StringUtils.containsOnly(value, "*");
     }
 
     /**
@@ -95,13 +198,13 @@ public final class DicomMatchUtils {
 
     /**
      * Matches using DICOM wildcard rules: '*' matches any sequence
-     * of characters, '?' matches any single character.
+     * of characters, '?' matches any single character. Matching is
+     * case-sensitive unless {@link #ignoresCase} holds for the VR.
      */
-    static boolean matchesWildcard(final String pattern, final String value,
-                                   final boolean caseInsensitive) {
+    static boolean matchesWildcard(final String pattern, final String value, final VR vr) {
         final String regex = wildcardToRegex(pattern);
-        final int flags = caseInsensitive ? Pattern.CASE_INSENSITIVE : 0;
-        return Pattern.compile(regex, flags).matcher(value).matches();
+        return Pattern.compile(regex, ignoresCase(vr) ? Pattern.CASE_INSENSITIVE : 0)
+                .matcher(value).matches();
     }
 
     /**
@@ -152,13 +255,29 @@ public final class DicomMatchUtils {
     }
 
     /**
-     * Matches a UID list (backslash-separated UIDs per PS3.4 C.2.2.2).
+     * List of UID Matching (PS3.4 C.2.2.2.2): each UID in the query
+     * may generate a match, so the candidate matches if any of its
+     * values exactly equals any query UID. A single UID is the
+     * one-element case. An absent or zero-length query value is
+     * universal matching.
+     *
+     * @param queryUids       the query UIDs (dcm4che splits the
+     *                        backslash-delimited list), or null
+     * @param candidateValues the candidate's values, or null if absent
+     * @return true if the candidate matches
      */
-    static boolean matchesUidList(final String queryValue, final String candidateValue) {
-        if (!StringUtils.contains(queryValue, '\\')) {
-            return queryValue.equals(candidateValue);
+    static boolean matchesUidList(final String[] queryUids,
+                                  final String[] candidateValues) {
+        final Set<String> uids = queryUids == null
+                ? Collections.emptySet()
+                : Arrays.stream(queryUids)
+                        .filter(StringUtils::isNotEmpty)
+                        .collect(Collectors.toSet());
+        if (uids.isEmpty()) {
+            return true; // universal match
         }
-        return Arrays.asList(queryValue.split("\\\\")).contains(candidateValue);
+        return candidateValues != null
+                && Arrays.stream(candidateValues).anyMatch(uids::contains);
     }
 
     /**
@@ -192,6 +311,86 @@ public final class DicomMatchUtils {
             }
         }
         return sb.toString();
+    }
+
+    private static final DateTimeFormatter DICOM_DATE =
+            DateTimeFormatter.ofPattern("uuuuMMdd")
+                    .withResolverStyle(ResolverStyle.STRICT);
+
+    /**
+     * The constraint a valid DA query value places on a date: lower and
+     * upper bounds in {@code YYYYMMDD} form, at least one present. An
+     * exact date has equal bounds; an open-ended range lacks one.
+     *
+     * @param lower the inclusive lower bound, if any
+     * @param upper the inclusive upper bound, if any
+     * @param exact true if the value was a single date, not a range
+     */
+    public record DateRange(Optional<String> lower, Optional<String> upper,
+                            boolean exact) {
+        /**
+         * Tests whether a candidate DA value is within this range.
+         * {@code YYYYMMDD} values order correctly as strings.
+         *
+         * @param candidate the candidate's date value
+         * @return true if the candidate satisfies every present bound
+         */
+        public boolean contains(final String candidate) {
+            return lower.map(bound -> candidate.compareTo(bound) >= 0).orElse(true)
+                    && upper.map(bound -> candidate.compareTo(bound) <= 0).orElse(true);
+        }
+    }
+
+    /**
+     * Parses a DA query value: an exact date {@code YYYYMMDD}, or a
+     * range {@code start-end} where either bound, but not both, may be
+     * omitted (PS3.4 C.2.2.2.5). Every bound must be a valid calendar
+     * date ({@link #isValidDicomDate}) and the start must not be after
+     * the end. This is the single definition of a valid DA query value:
+     * {@link DateTimeKeys} rejects requests for which it is empty, and
+     * the SQL push-down ({@code DimseDataAccess.addDateFilter}) and the
+     * post-filter ({@link #matchesValue}) both match from its result.
+     *
+     * @param value a non-null DA query value
+     * @return the bounds, or empty if the value is malformed
+     */
+    public static Optional<DateRange> parseDateRange(final String value) {
+        if (!isDateRange(value)) {
+            return Optional.of(value)
+                    .filter(DicomMatchUtils::isValidDicomDate)
+                    .map(date -> new DateRange(Optional.of(date), Optional.of(date), true));
+        }
+        final int dash = value.indexOf('-');
+        final String start = value.substring(0, dash);
+        final String end = value.substring(dash + 1);
+        final boolean wellFormed = !(start.isEmpty() && end.isEmpty())
+                && (start.isEmpty() || isValidDicomDate(start))
+                && (end.isEmpty() || isValidDicomDate(end))
+                && (start.isEmpty() || end.isEmpty() || start.compareTo(end) <= 0);
+        return wellFormed
+                ? Optional.of(new DateRange(Optional.of(start).filter(StringUtils::isNotEmpty),
+                        Optional.of(end).filter(StringUtils::isNotEmpty), false))
+                : Optional.empty();
+    }
+
+    /**
+     * Tests whether a value is a valid DICOM DA date
+     * ({@code YYYYMMDD} naming a real calendar date). Range and
+     * partial-precision values are not accepted.
+     *
+     * @param dicomDate the value to check
+     * @return true if the value is a valid 8-digit calendar date
+     */
+    public static boolean isValidDicomDate(final String dicomDate) {
+        if (dicomDate == null || dicomDate.length() != 8) {
+            return false;
+        }
+        try {
+            LocalDate.parse(dicomDate, DICOM_DATE);
+            return true;
+        } catch (final DateTimeParseException e) {
+            return false;
+        }
     }
 
     /**

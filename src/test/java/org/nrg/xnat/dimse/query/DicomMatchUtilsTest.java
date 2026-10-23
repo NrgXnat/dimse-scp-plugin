@@ -5,6 +5,9 @@ import org.dcm4che3.data.Tag;
 import org.dcm4che3.data.VR;
 import org.junit.Test;
 
+import java.util.Arrays;
+import java.util.Optional;
+
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
@@ -50,6 +53,28 @@ public class DicomMatchUtilsTest {
                 Tag.PatientName, VR.PN, "Smith", "SMITH"));
     }
 
+    @Test
+    public void exactMatchIsCaseSensitiveExceptPn() {
+        // PS3.4 C.2.2.2.1: Single Value Matching is case-sensitive.
+        assertFalse(DicomMatchUtils.matchesValue(
+                Tag.AccessionNumber, VR.SH, "acc001", "ACC001"));
+        assertFalse(DicomMatchUtils.matchesValue(
+                Tag.Modality, VR.CS, "ct", "CT"));
+        assertFalse(DicomMatchUtils.matchesValue(
+                Tag.PatientID, VR.LO, "SUBJECT01", "subject01"));
+        assertTrue(DicomMatchUtils.matchesValue(
+                Tag.PatientID, VR.LO, "subject01", "subject01"));
+    }
+
+    @Test
+    public void onlyPnIgnoresCase() {
+        assertTrue(DicomMatchUtils.ignoresCase(VR.PN));
+        for (final VR vr : Arrays.asList(VR.AE, VR.CS, VR.LO, VR.LT, VR.SH,
+                VR.ST, VR.UC, VR.UR, VR.UT, VR.IS, VR.UI)) {
+            assertFalse(vr.toString(), DicomMatchUtils.ignoresCase(vr));
+        }
+    }
+
     // --- Wildcard matching ---
 
     @Test
@@ -83,9 +108,74 @@ public class DicomMatchUtilsTest {
     }
 
     @Test
+    public void wildcardIsCaseSensitiveExceptPn() {
+        // PS3.4 C.2.2.2.4: case sensitive, except for PN.
+        assertFalse(DicomMatchUtils.matchesValue(
+                Tag.PatientID, VR.LO, "sub*", "SUBJECT01"));
+        assertTrue(DicomMatchUtils.matchesValue(
+                Tag.PatientID, VR.LO, "SUB*", "SUBJECT01"));
+        assertFalse(DicomMatchUtils.matchesValue(
+                Tag.Modality, VR.CS, "c?", "CT"));
+    }
+
+    @Test
     public void wildcardNoMatchReturns_false() {
         assertFalse(DicomMatchUtils.matchesValue(
                 Tag.PatientName, VR.PN, "JO*", "SMITH"));
+    }
+
+    // --- Lone * is universal matching (PS3.4 C.2.2.2.4) ---
+
+    @Test
+    public void loneStarMatchesEmptyCandidate() {
+        assertTrue(DicomMatchUtils.matchesValue(
+                Tag.ReferringPhysicianName, VR.PN, "*", ""));
+        assertTrue(DicomMatchUtils.matchesValue(
+                Tag.ReferringPhysicianName, VR.PN, "*", null));
+        assertTrue(DicomMatchUtils.matchesValue(
+                Tag.ReferringPhysicianName, VR.PN, "**", ""));
+    }
+
+    @Test
+    public void loneStarMatchesAbsentCandidate() {
+        assertTrue(DicomMatchUtils.matchesAnyValue(
+                Tag.ReferringPhysicianName, VR.PN, new String[]{"*"}, null));
+        assertTrue(DicomMatchUtils.matchesAnyValue(
+                Tag.ReferringPhysicianName, VR.PN, new String[]{"*"}, new String[0]));
+    }
+
+    @Test
+    public void otherWildcardsStillRequireAValue() {
+        assertFalse(DicomMatchUtils.matchesValue(
+                Tag.PatientName, VR.PN, "*A*", ""));
+        assertFalse(DicomMatchUtils.matchesValue(
+                Tag.PatientName, VR.PN, "?*", ""));
+        assertFalse(DicomMatchUtils.matchesAnyValue(
+                Tag.PatientName, VR.PN, new String[]{"S*"}, null));
+    }
+
+    @Test
+    public void loneStarThroughMatchesQuery() {
+        // ReferringPhysicianName=* must match a study whose value is zero
+        // length: the SCP never sets Referring Physician Name.
+        final Attributes query = new Attributes();
+        query.setString(Tag.QueryRetrieveLevel, VR.CS, "STUDY");
+        query.setString(Tag.ReferringPhysicianName, VR.PN, "*");
+        final Attributes candidate = new Attributes();
+        candidate.setNull(Tag.ReferringPhysicianName, VR.PN);
+
+        assertTrue(DicomMatchUtils.matchesQuery(query).test(candidate));
+        assertTrue(DicomMatchUtils.matchesQuery(query).test(new Attributes()));
+    }
+
+    @Test
+    public void isUniversalWildcard() {
+        assertTrue(DicomMatchUtils.isUniversalWildcard("*"));
+        assertTrue(DicomMatchUtils.isUniversalWildcard("***"));
+        assertFalse(DicomMatchUtils.isUniversalWildcard(""));
+        assertFalse(DicomMatchUtils.isUniversalWildcard(null));
+        assertFalse(DicomMatchUtils.isUniversalWildcard("*?"));
+        assertFalse(DicomMatchUtils.isUniversalWildcard("A*"));
     }
 
     // --- Date range matching ---
@@ -122,6 +212,80 @@ public class DicomMatchUtilsTest {
                 Tag.StudyDate, VR.DA, "20200101-", "20190101"));
     }
 
+    // --- DA parsing (malformed values are rejected by DateTimeKeys) ---
+
+    @Test
+    public void exactDateMatchesOnlyThatDate() {
+        assertTrue(DicomMatchUtils.matchesValue(
+                Tag.StudyDate, VR.DA, "20200615", "20200615"));
+        assertFalse(DicomMatchUtils.matchesValue(
+                Tag.StudyDate, VR.DA, "20200615", "20200616"));
+    }
+
+    @Test
+    public void parseDateRangeBounds() {
+        final DicomMatchUtils.DateRange exact =
+                DicomMatchUtils.parseDateRange("20200615").orElseThrow();
+        assertEquals(Optional.of("20200615"), exact.lower());
+        assertEquals(Optional.of("20200615"), exact.upper());
+        assertTrue(exact.exact());
+
+        final DicomMatchUtils.DateRange openEnd =
+                DicomMatchUtils.parseDateRange("20200101-").orElseThrow();
+        assertEquals(Optional.of("20200101"), openEnd.lower());
+        assertEquals(Optional.empty(), openEnd.upper());
+        assertFalse(openEnd.exact());
+
+        final DicomMatchUtils.DateRange openStart =
+                DicomMatchUtils.parseDateRange("-20201231").orElseThrow();
+        assertEquals(Optional.empty(), openStart.lower());
+        assertEquals(Optional.of("20201231"), openStart.upper());
+
+        // equal bounds are a valid range
+        assertTrue(DicomMatchUtils.parseDateRange("20200101-20200101").isPresent());
+    }
+
+    @Test
+    public void parseDateRangeRejectsMalformed() {
+        for (final String value : Arrays.asList(
+                "202001",            // not YYYYMMDD
+                "20200732",          // no July 32
+                "20201301-",         // no month 13
+                "20050701-20160732", // one bad bound
+                "20201231-20200101", // reversed
+                "-",                 // no bound
+                "2020*",             // wildcard
+                "*",                 // lone wildcard
+                "2020-01-01",        // ISO, not DA
+                "2020.01.01",        // retired ACR-NEMA form
+                "\"\"")) {          // Empty Value Matching, not negotiated
+            assertFalse(value, DicomMatchUtils.parseDateRange(value).isPresent());
+        }
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void matchesValueThrowsOnUnvalidatedMalformedDate() {
+        DicomMatchUtils.matchesValue(Tag.StudyDate, VR.DA, "202001", "20200615");
+    }
+
+    @Test
+    public void timeRangesStillMatch() {
+        assertTrue(DicomMatchUtils.matchesValue(
+                Tag.StudyTime, VR.TM, "080000-120000", "093000"));
+        assertFalse(DicomMatchUtils.matchesValue(
+                Tag.StudyTime, VR.TM, "080000-120000", "130000"));
+    }
+
+    @Test
+    public void leapSecondBoundAgainstStoredTimes() {
+        // Stored times never have second 60 (xs:time), so as an upper
+        // bound 235960 covers second 59; as a lower bound it matches none.
+        assertTrue(DicomMatchUtils.matchesValue(
+                Tag.StudyTime, VR.TM, "-235960", "235959"));
+        assertFalse(DicomMatchUtils.matchesValue(
+                Tag.StudyTime, VR.TM, "235960-", "235959"));
+    }
+
     // --- UID list matching ---
 
     @Test
@@ -133,11 +297,177 @@ public class DicomMatchUtilsTest {
     }
 
     @Test
-    public void uidListMatch() {
-        assertTrue(DicomMatchUtils.matchesValue(
-                Tag.StudyInstanceUID, VR.UI, "1.2.3\\4.5.6\\7.8.9", "4.5.6"));
-        assertFalse(DicomMatchUtils.matchesValue(
-                Tag.StudyInstanceUID, VR.UI, "1.2.3\\4.5.6\\7.8.9", "0.0.0"));
+    public void uidListMatchesEveryListedUid() {
+        // PS3.4 C.2.2.2.2: each UID in the list may generate a match,
+        // independent of list order.
+        final Attributes forward = uidQuery("1.2.3", "4.5.6");
+        final Attributes reverse = uidQuery("4.5.6", "1.2.3");
+        for (final Attributes query : Arrays.asList(forward, reverse)) {
+            assertTrue(DicomMatchUtils.matchesQuery(query).test(study("1.2.3")));
+            assertTrue(DicomMatchUtils.matchesQuery(query).test(study("4.5.6")));
+            assertFalse(DicomMatchUtils.matchesQuery(query).test(study("7.8.9")));
+        }
+    }
+
+    @Test
+    public void singleUidQueryMatchesExactly() {
+        final Attributes query = uidQuery("1.2.3");
+        assertTrue(DicomMatchUtils.matchesQuery(query).test(study("1.2.3")));
+        assertFalse(DicomMatchUtils.matchesQuery(query).test(study("1.2.30")));
+    }
+
+    @Test
+    public void emptyUidQueryIsUniversal() {
+        final Attributes query = new Attributes();
+        query.setNull(Tag.StudyInstanceUID, VR.UI);
+        assertTrue(DicomMatchUtils.matchesQuery(query).test(study("1.2.3")));
+    }
+
+    @Test
+    public void uidListDoesNotMatchAbsentCandidate() {
+        assertFalse(DicomMatchUtils.matchesUidList(
+                new String[] {"1.2.3", "4.5.6"}, null));
+    }
+
+    private static Attributes uidQuery(final String... uids) {
+        final Attributes query = new Attributes();
+        query.setString(Tag.QueryRetrieveLevel, VR.CS, "STUDY");
+        query.setString(Tag.StudyInstanceUID, VR.UI, uids);
+        return query;
+    }
+
+    private static Attributes study(final String uid) {
+        final Attributes candidate = new Attributes();
+        candidate.setString(Tag.StudyInstanceUID, VR.UI, uid);
+        return candidate;
+    }
+
+    // --- Multi-valued attribute matching (Modalities in Study) ---
+
+    @Test
+    public void multiValuedCandidateMatchesAnyValue() {
+        assertTrue(DicomMatchUtils.matchesAnyValue(
+                Tag.ModalitiesInStudy, VR.CS, new String[]{"PT"}, new String[]{"CT", "PT"}));
+        assertTrue(DicomMatchUtils.matchesAnyValue(
+                Tag.ModalitiesInStudy, VR.CS, new String[]{"CT"}, new String[]{"CT", "PT"}));
+        // CS matching is case-sensitive
+        assertFalse(DicomMatchUtils.matchesAnyValue(
+                Tag.ModalitiesInStudy, VR.CS, new String[]{"pt"}, new String[]{"CT", "PT"}));
+    }
+
+    @Test
+    public void multiValuedCandidateRejectsAbsentAndEmpty() {
+        assertFalse(DicomMatchUtils.matchesAnyValue(
+                Tag.ModalitiesInStudy, VR.CS, new String[]{"MR"}, new String[]{"CT", "PT"}));
+        assertFalse(DicomMatchUtils.matchesAnyValue(
+                Tag.ModalitiesInStudy, VR.CS, new String[]{"CT"}, null));
+        // universal query matches regardless
+        assertTrue(DicomMatchUtils.matchesAnyValue(
+                Tag.ModalitiesInStudy, VR.CS, new String[]{""}, new String[]{"CT"}));
+    }
+
+    @Test
+    public void queryMatchesStudyContainingModality() {
+        final Attributes query = new Attributes();
+        query.setString(Tag.QueryRetrieveLevel, VR.CS, "STUDY");
+        query.setString(Tag.ModalitiesInStudy, VR.CS, "PT");
+
+        final Attributes candidate = new Attributes();
+        // multi-valued, as built from string_agg + split
+        candidate.setString(Tag.ModalitiesInStudy, VR.CS, "CT", "PT");
+
+        assertTrue(DicomMatchUtils.matchesQuery(query).test(candidate));
+    }
+
+    @Test
+    public void queryRejectsStudyWithoutModality() {
+        final Attributes query = new Attributes();
+        query.setString(Tag.QueryRetrieveLevel, VR.CS, "STUDY");
+        query.setString(Tag.ModalitiesInStudy, VR.CS, "MR");
+
+        final Attributes candidate = new Attributes();
+        candidate.setString(Tag.ModalitiesInStudy, VR.CS, "CT", "PT");
+
+        assertFalse(DicomMatchUtils.matchesQuery(query).test(candidate));
+    }
+
+    // --- Multi-valued query keys (match-any, order-independent) ---
+
+    @Test
+    public void multiValuedQueryIsOrderIndependent() {
+        for (final String[] modalities : Arrays.asList(
+                new String[]{"MR", "CT"}, new String[]{"CT", "MR"})) {
+            final Attributes query = new Attributes();
+            query.setString(Tag.QueryRetrieveLevel, VR.CS, "SERIES");
+            query.setString(Tag.Modality, VR.CS, modalities);
+
+            assertTrue(DicomMatchUtils.matchesQuery(query).test(series("MR")));
+            assertTrue(DicomMatchUtils.matchesQuery(query).test(series("CT")));
+            assertFalse(DicomMatchUtils.matchesQuery(query).test(series("PT")));
+        }
+    }
+
+    @Test
+    public void multiValuedQueryAgainstMultiValuedCandidate() {
+        final Attributes query = new Attributes();
+        query.setString(Tag.QueryRetrieveLevel, VR.CS, "STUDY");
+        query.setString(Tag.ModalitiesInStudy, VR.CS, "MR", "PT");
+
+        final Attributes candidate = new Attributes();
+        candidate.setString(Tag.ModalitiesInStudy, VR.CS, "CT", "PT");
+
+        // match-any: PT is shared, MR is not required
+        assertTrue(DicomMatchUtils.matchesQuery(query).test(candidate));
+    }
+
+    @Test
+    public void multiValuedQueryAppliesWildcardsPerValue() {
+        assertTrue(DicomMatchUtils.matchesAnyValue(Tag.PatientName, VR.PN,
+                new String[]{"JONES", "SM*"}, new String[]{"SMITH"}));
+        assertFalse(DicomMatchUtils.matchesAnyValue(Tag.PatientName, VR.PN,
+                new String[]{"JONES", "BR*"}, new String[]{"SMITH"}));
+    }
+
+    @Test
+    public void multiValuedQueryIgnoresEmptyValues() {
+        // "\MR": the empty value is ignored, not universal
+        assertFalse(DicomMatchUtils.matchesAnyValue(Tag.Modality, VR.CS,
+                new String[]{"", "MR"}, new String[]{"CT"}));
+        assertTrue(DicomMatchUtils.matchesAnyValue(Tag.Modality, VR.CS,
+                new String[]{"", "MR"}, new String[]{"MR"}));
+        // all empty: universal
+        assertTrue(DicomMatchUtils.matchesAnyValue(Tag.Modality, VR.CS,
+                new String[]{"", ""}, null));
+    }
+
+    @Test
+    public void multiValuedQueryWithLoneStarIsUniversal() {
+        assertTrue(DicomMatchUtils.matchesAnyValue(Tag.Modality, VR.CS,
+                new String[]{"MR", "*"}, null));
+    }
+
+    @Test
+    public void multiValuedDateRangesMatchAny() {
+        final String[] ranges = {"20200101-20200131", "20210101-"};
+        assertTrue(DicomMatchUtils.matchesAnyValue(Tag.StudyDate, VR.DA,
+                ranges, new String[]{"20200115"}));
+        assertTrue(DicomMatchUtils.matchesAnyValue(Tag.StudyDate, VR.DA,
+                ranges, new String[]{"20220301"}));
+        assertFalse(DicomMatchUtils.matchesAnyValue(Tag.StudyDate, VR.DA,
+                ranges, new String[]{"20200601"}));
+    }
+
+    @Test
+    public void nonEmptyValuesDropsNullAndEmpty() {
+        assertEquals(Arrays.asList("A", "B"), DicomMatchUtils.nonEmptyValues(
+                new String[]{"A", "", null, "B"}));
+        assertTrue(DicomMatchUtils.nonEmptyValues(null).isEmpty());
+    }
+
+    private static Attributes series(final String modality) {
+        final Attributes candidate = new Attributes();
+        candidate.setString(Tag.Modality, VR.CS, modality);
+        return candidate;
     }
 
     // --- Full Attributes matching ---
@@ -184,6 +514,25 @@ public class DicomMatchUtilsTest {
     public void toSqlLikeEscapesSqlWildcards() {
         assertEquals("100\\%", DicomMatchUtils.toSqlLike("100%"));
         assertEquals("a\\_b", DicomMatchUtils.toSqlLike("a_b"));
+    }
+
+    // --- DICOM date validation ---
+
+    @Test
+    public void isValidDicomDateAcceptsRealDates() {
+        assertTrue(DicomMatchUtils.isValidDicomDate("20061214"));
+        assertTrue(DicomMatchUtils.isValidDicomDate("20200229")); // leap year
+    }
+
+    @Test
+    public void isValidDicomDateRejectsBadDates() {
+        assertFalse(DicomMatchUtils.isValidDicomDate("20160732")); // no day 32
+        assertFalse(DicomMatchUtils.isValidDicomDate("20210229")); // not leap
+        assertFalse(DicomMatchUtils.isValidDicomDate("20201301")); // no month 13
+        assertFalse(DicomMatchUtils.isValidDicomDate("2020123"));  // 7 chars
+        assertFalse(DicomMatchUtils.isValidDicomDate("abcd1234"));
+        assertFalse(DicomMatchUtils.isValidDicomDate(""));
+        assertFalse(DicomMatchUtils.isValidDicomDate(null));
     }
 
     // --- DICOM date to ISO conversion ---

@@ -38,9 +38,7 @@ DICOM users. Read this section before deploying.
    level. There is no per-association authentication. The
    Calling AE Title is logged but not validated.
 
-5. **No TLS.** All communication is over plain TCP.
-
-6. **C-FIND results do not match C-GET file contents.** C-FIND
+5. **C-FIND results do not match C-GET file contents.** C-FIND
    responses are populated from XNAT's data model, not from
    the original DICOM headers. The DICOM files returned by
    C-GET retain their original header values. This means
@@ -55,7 +53,7 @@ DICOM users. Read this section before deploying.
    - Patient ID = XNAT subject label within the project
    - Accession Number = XNAT session ID
    - Study ID = XNAT session ID
-   - Study Description = XNAT session note
+   - Study Description = XNAT project ID
    Furthermore, any fields returned from C-FIND may differ
    from the corresponding values in the DICOM storage
    instances if post-archival modifications are made to the
@@ -148,9 +146,8 @@ rejected.
 ### 2.3 Sequencing Constraints
 
 The SCP processes requests sequentially within each
-association. Multiple concurrent associations are supported
-via a cached thread pool. There is no limit on concurrent
-associations.
+association. Multiple concurrent associations are supported,
+with no fixed limit on the number of simultaneous associations.
 
 ---
 
@@ -179,7 +176,7 @@ looked up at association time. This means:
   Title.
 - AE titles that do not match a project are rejected at
   request time (the association itself is accepted; the
-  C-FIND or C-GET request returns status 0272H Unable to
+  C-FIND or C-GET request returns status C000H Unable to
   Process).
 - DICOM AE titles are limited to 16 characters. XNAT project
   IDs longer than 16 characters cannot be addressed. A
@@ -311,10 +308,10 @@ sub-operation.
 
 ## 4. C-ECHO SCP
 
-The Verification SOP Class is supported using dcm4che's
-standard implementation. No application-specific processing
-occurs. The SCP responds with status Success (0000H) if the
-association was accepted.
+The Verification SOP Class (C-ECHO) is supported using dcm4che's
+standard implementation, with no application-specific processing;
+the SCP responds with status Success (0000H) if the association
+was accepted.
 
 ---
 
@@ -332,13 +329,24 @@ supported. The following query levels are available:
 | SERIES  | Yes        | Yes      |
 | IMAGE   | Yes        | Yes      |
 
+A PATIENT level query in the Study Root model is rejected with
+status A900H.
+
 ### 5.2 Query/Retrieve Level Matching
 
 The QueryRetrieveLevel attribute (0008,0052) is required in
 all C-FIND requests. The value "INSTANCE" is accepted as a
-synonym for "IMAGE". Matching is case-insensitive.
+synonym for "IMAGE". The value is accepted in any letter case.
 
 ### 5.3 Matching Keys and Return Keys
+
+The tables below list the keys supported at each level. The
+Identifier may also hold the Unique Key of each level above the
+Query/Retrieve level (PS3.4 C.4.1.2.1): Patient ID (Patient Root
+only), Study Instance UID and Series Instance UID. Any other key,
+including a key of another level such as Modality (0008,0060) at
+STUDY level, is ignored: it does not restrict the matches and is not
+returned (PS3.4 C.2.2.1.3).
 
 #### 5.3.1 PATIENT Level
 
@@ -358,6 +366,11 @@ project.
 
 #### 5.3.2 STUDY Level
 
+In the Patient Root model, Patient Name, Patient Sex and Patient
+Birth Date are PATIENT level keys (PS3.4 Table C.6-1) and are ignored
+at STUDY level; Patient ID is the Unique Key of the PATIENT level.
+The Study Root model has them at STUDY level (PS3.4 Table C.6-5).
+
 | DICOM Attribute                    | Tag          | Matching | Return | XNAT Source                |
 |------------------------------------|--------------|----------|--------|----------------------------|
 | Study Instance UID                 | (0020,000D)  | S, L     | R      | Session UID                |
@@ -365,19 +378,22 @@ project.
 | Study Time                         | (0008,0030)  | —        | O      | Session time               |
 | Accession Number                   | (0008,0050)  | S, W     | R      | **Session ID** (see 5.7)   |
 | Study ID                           | (0020,0010)  | —        | O      | Session ID                 |
-| Study Description                  | (0008,1030)  | —        | O      | Session note               |
+| Study Description                  | (0008,1030)  | —        | O      | Project ID (see 5.7)       |
 | Patient Name                       | (0010,0010)  | S, W     | R      | **Session label** (see 5.7)|
 | Patient ID                         | (0010,0020)  | S, W     | R      | Subject label              |
 | Patient Sex                        | (0010,0040)  | —        | O      | Subject gender (see 5.8)   |
 | Patient Birth Date                 | (0010,0030)  | —        | O      | Subject DOB                |
-| Modalities in Study                | (0008,0061)  | —        | O      | Derived from scans         |
+| Modalities in Study                | (0008,0061)  | S        | O      | Derived from scans (see 5.5)|
 | Number of Study Related Series     | (0020,1206)  | —        | O      | Scan count                 |
-| Number of Study Related Instances  | (0020,1208)  | —        | O      | File count (DICOM only)    |
+| Number of Study Related Instances  | (0020,1208)  | —        | O      | File count (see 5.10)      |
 | Referring Physician Name           | (0008,0090)  | —        | O      | Always empty               |
 
 #### 5.3.3 SERIES Level
 
-The query must include a Study Instance UID.
+The query must include a Study Instance UID. In the Patient Root
+model, a Patient ID in the query restricts the matches to a study of
+a patient it matches, and each match returns that patient's Patient
+ID; this applies at IMAGE level too.
 
 | DICOM Attribute                      | Tag          | Matching | Return | XNAT Source            |
 |--------------------------------------|--------------|----------|--------|------------------------|
@@ -386,7 +402,7 @@ The query must include a Study Instance UID.
 | Modality                             | (0008,0060)  | S        | R      | Scan modality (see 5.9)|
 | Series Number                        | (0020,0011)  | —        | O      | Scan ID                |
 | Series Description                   | (0008,103E)  | —        | O      | Scan series description|
-| Number of Series Related Instances   | (0020,1209)  | —        | O      | File count (DICOM only)|
+| Number of Series Related Instances   | (0020,1209)  | —        | O      | File count (see 5.10)  |
 
 #### 5.3.4 IMAGE Level
 
@@ -420,29 +436,83 @@ Instance UID.
 
 ### 5.4 Return Key Handling
 
-All attributes present in the C-FIND Identifier are included
-in each result, per PS3.4 C.2.2.1. Attributes not populated
-by the SCP are returned with zero length.
+Each result includes every key of the C-FIND Identifier that is
+supported at the Query/Retrieve level (see 5.3); a supported key
+that the SCP does not populate is returned with zero length. Keys
+not supported at that level are not returned.
 
 ### 5.5 Matching Semantics
 
-- **Single Value Matching:** Case-sensitive for all VRs except
-  PN (Patient Name), which is case-insensitive.
+- **Case sensitivity:** Matching is case-sensitive (PS3.4
+  C.2.2.2.1 and C.2.2.2.4), except for attributes with a PN VR,
+  such as Patient Name (0010,0010). For PN, which PS3.4
+  C.2.2.2.1.1 leaves to the implementation, this SCP ignores
+  case in both Single Value and Wild Card Matching: `smith` and
+  `sm*` match `SMITH`. For any other attribute the case must
+  match exactly: `ct` does not match Modality `CT`, and Patient ID
+  must match the case of the XNAT subject label. Matching is not
+  insensitive to accents or other character encoding variants.
+- **Single Value Matching:** an exact match, subject to the case
+  rule above.
 - **Wildcard Matching:** `*` matches any sequence of
-  characters; `?` matches a single character. Available for
-  string VRs. Case-insensitive for PN.
+  characters, including none; `?` matches a single character,
+  subject to the case rule above. PS3.4 C.2.2.2.4 defines Wild
+  Card Matching for the VRs AE, CS, LO, LT, PN, SH, ST, UC, UR
+  and UT; this SCP also applies it to the other keys it matches,
+  such as Series Number (IS), except Date and Time keys (rejected,
+  see below) and UIDs (always exact). A value of `*` alone is
+  equivalent to Universal Matching (PS3.4 C.2.2.2.4): it also
+  matches entities whose value for that attribute is empty.
 - **Date Range Matching:** Format `YYYYMMDD-YYYYMMDD`. Either
-  bound may be omitted for an open-ended range.
+  bound, but not both, may be omitted for an open-ended range
+  (PS3.4 C.2.2.2.5).
+- **Date and Time values are validated.** Every non-empty value
+  of every Date (DA) or Time (TM) key in the Identifier must be
+  an exact value or a range, `<v1>-<v2>`, `-<v1>` or `<v1>-`,
+  with `<v1>` not later than `<v2>`. A Date must be `YYYYMMDD`
+  naming a real calendar date; a Time must be
+  `HH[MM[SS[.FFFFFF]]]` (PS3.5 Table 6.2-1), where seconds may
+  be `60` (a leap second) only in minute 59, at any hour:
+  `235960` and `115960` are accepted, `103060` is not. Leap
+  seconds are inserted at 23:59:60 UTC, which a whole-hour offset
+  from UTC renders in minute 59; a time zone with a fractional-hour
+  offset (for example +05:30, `HH:29:60`) cannot query its leap
+  second, and the date is not checked. Anything else is
+  rejected with status C000H, with Offending Element (0000,0901)
+  identifying the key: for example `202001`, `20201301-`,
+  `103060`, a reversed range, `-`, any wildcard including a lone `*`, and
+  `""` (Empty Value Matching is not supported). A zero-length
+  value is still Universal Matching. Date and Time keys that are
+  not supported at the Query/Retrieve level are ignored (see 5.3)
+  and not validated.
 - **UID List Matching:** Backslash-separated UID values per
-  PS3.4 C.2.2.2.
+  PS3.4 C.2.2.2.2; an entity matches if its UID exactly equals
+  any UID in the list. A list is accepted only in the Unique Key
+  of the Query/Retrieve level itself (PS3.4 C.4.1.2.1). A request with
+  more than one value in a Unique Key *above* that level — Study
+  Instance UID at SERIES or IMAGE level, or Series Instance UID
+  at IMAGE level — is rejected with status C000H, with Offending
+  Element (0000,0901) identifying the multi-valued attribute.
 - **Universal Matching:** A zero-length query value matches all
   candidates.
+- **Multi-valued Attribute Matching:** For an attribute that may
+  hold multiple values — notably Modalities in Study (0008,0061)
+  — a single query value matches if any of the study's values
+  matches it (for example, a `PT` query matches a study that
+  contains both CT and PT).
+- **Multiple values in a query key:** Extended Negotiation of
+  Multiple Value Matching (PS3.4 C.2.2.2.8) is not supported,
+  and without it the semantics of multiple values in a Key
+  Attribute are undefined (C.2.2.2.8 Note 4). This SCP matches
+  an entity if *any* query value matches any of its values, so
+  `MR\CT` and `CT\MR` return the same entities: series of either
+  modality. Each value is matched with the rules above (for
+  example, `SM*\JONES` or two date ranges). Zero-length values
+  in the list are ignored; a value of `*` makes the key
+  universal. This differs from negotiated Multiple Value
+  Matching, which would require every query value to match.
+  Lists of UIDs follow UID List Matching above.
 - **Relational queries** are not supported.
-
-Indexed attributes (Study Instance UID, Study Date, Accession
-Number, Patient ID, Patient Name) are pushed to SQL for
-efficient matching. Non-indexed attributes are post-filtered
-in Java.
 
 ### 5.6 C-FIND Status Codes
 
@@ -450,8 +520,25 @@ in Java.
 |------------|-------|--------------------------------------|
 | Success    | 0000H | Query completed                      |
 | Pending    | FF00H | Matches remaining                    |
-| Failure    | 0122H | Unable to Process (e.g., unknown AE) |
+| Failure    | C000H | Unable to Process (e.g., unknown AE) |
 | Failure    | A900H | Identifier does not match SOP class  |
+
+C000H is returned for an unknown Called AE Title, when a
+Unique Key above the Query/Retrieve level holds more than one
+value, and when a Date or Time key value is malformed (see 5.5);
+in the latter two cases the response includes Offending Element
+(0000,0901) and an Error Comment. C000H is also returned when the
+query cannot be completed, for example because of a database error;
+the Error Comment is "Query failed" and does not describe the cause.
+A database error at PATIENT, STUDY or SERIES level is reported before
+any match is returned. An internal error while matches are being
+returned also ends the query with C000H, possibly after Pending
+responses; the matches received are then incomplete. At IMAGE level,
+a failure to look up the study, or to read a series' resource
+catalog, is logged and reads as fewer or no matches rather
+than as C000H. A900H is
+returned when the Query/Retrieve Level is missing or
+unsupported, including PATIENT level in the Study Root model.
 
 ### 5.7 Non-standard Attribute Mappings
 
@@ -477,8 +564,9 @@ below.
 
 - **Study ID (0020,0010)** is the XNAT session ID.
 
-- **Study Description (0008,1030)** is populated from the
-  XNAT session note field.
+- **Study Description (0008,1030)** is the XNAT project ID
+  (the same value used as the Called AE Title to scope the
+  query), not a clinical study description.
 
 - **Referring Physician Name (0008,0090)** is always empty.
 
@@ -502,14 +590,26 @@ adjustments:
   Positron Emission Tomography).
 - Values longer than 16 characters are truncated to 16.
 
+The `PET`→`PT` conversion is also reversed for matching: a
+`Modality` query key of `PT` (SERIES level) matches scans whose
+XNAT modality is `PET`.
+
 ### 5.10 File Count Semantics
 
 Number of Study Related Instances, Number of Series Related
 Instances, and Number of Patient Related Instances count
-files from XNAT resources whose label is `DICOM` or
-`secondary`. Resources labeled `SNAPSHOTS` or with other
-labels are excluded. This means file counts may differ from
-the total number of files visible in the XNAT UI.
+files in the scan resources that C-GET retrieves from (6.3):
+resources whose label, format, or content contains `DICOM` or
+`secondary`, ignoring case (for example `DICOM`, `DICOM_ORIG`,
+`secondary`, or any resource with format `DICOM`). Other
+resources, such as `SNAPSHOTS`, are excluded. Every file in a
+counted resource is included, so a count can exceed the
+instances a C-GET returns if a resource also holds non-DICOM
+files. File counts may also differ from the total number of
+files visible in the XNAT UI.
+
+Number of Patient Related Studies counts the subject's imaging
+sessions in the project; other experiments are not studies.
 
 ---
 
@@ -530,7 +630,9 @@ The C-GET Identifier must contain at least one of:
   provided.
 - **Patient ID (0010,0020):** Retrieves all instances for the
   matching subject (identified by subject label within the
-  project).
+  project). For a subject shared into the project, only that
+  subject's sessions owned by or shared into the project are
+  retrieved; sessions the subject has in other projects are not.
 
 If neither is present, the SCP returns status A900H
 (Identifier Does Not Match SOP Class).
@@ -544,25 +646,19 @@ Optional narrowing keys:
 
 ### 6.3 Instance Location
 
-Instances are located by traversing the XNAT catalog
-structure:
+Within the resolved project, C-GET returns the DICOM entries
+of scan catalog resources whose label, format, or content
+contains `DICOM` or `secondary`, ignoring case (the same rule
+as the file counts in section 5.10).
+Data held under other resource types is not retrievable via
+C-GET. A C-GET can still return fewer instances than the C-FIND
+counts: the counts include every file in a matching resource,
+while C-GET sends only its DICOM catalog entries.
 
-1. Find sessions matching the Study Instance UID or Patient
-   ID within the project.
-2. For each session, iterate over scans (applying the Series
-   Instance UID filter if present).
-3. For each scan, find resource catalogs whose label, format,
-   or content descriptor contains `dicom` or `secondary`
-   (case-insensitive).
-4. For each catalog, iterate over entries of type
-   `CatDcmentryBean` (applying the SOP Instance UID filter
-   if present).
-5. For each entry, resolve the file path and read the DICOM
-   File Meta Information to obtain the SOP Class UID and
-   Transfer Syntax UID.
-
-If a catalog entry's file cannot be found on disk or cannot
-be read, that instance is silently skipped.
+If an instance's file cannot be located on disk or cannot be
+read, or a resource catalog cannot be read, the affected
+instances are silently skipped — omitted from the retrieval
+rather than reported as failed sub-operations.
 
 ### 6.4 Transfer Syntax Selection and Transcoding
 
@@ -581,9 +677,7 @@ syntax as follows:
 **Uncompressed transcoding.** When the selected transfer
 syntax differs from the file's native syntax and both are
 uncompressed (IVR LE, EVR LE, or EVR BE), the SCP transcodes
-on the fly by parsing the dataset into memory and
-re-serializing it in the negotiated syntax. This is
-transparent to the SCU.
+on the fly. This is transparent to the SCU.
 
 **Compressed data.** Transcoding to or from compressed
 transfer syntaxes (e.g., JPEG 2000, JPEG-LS, RLE) is not
@@ -598,14 +692,14 @@ syntax.
 | Success    | 0000H | All sub-operations completed         |
 | Pending    | FF00H | Sub-operations remaining             |
 | Warning    | B000H | One or more sub-operations failed    |
-| Failure    | 0122H | Unable to Process (e.g., unknown AE) |
+| Failure    | C000H | Unable to Process (e.g., unknown AE) |
 | Failure    | A900H | Identifier does not match SOP class  |
 | Failure    | A701H | Refused: out of resources (unable to calculate number of matches) |
 | Failure    | A702H | Refused: unable to perform sub-operations |
 
 Status codes for individual C-STORE sub-operations are
-determined by the SCU's C-STORE SCP and by dcm4che's
-BasicRetrieveTask framework.
+determined by the SCU's C-STORE SCP and by dcm4che's retrieve
+handling.
 
 ---
 
@@ -615,8 +709,8 @@ BasicRetrieveTask framework.
 
 There is no DICOM-level authentication. The plugin does not
 implement User Identity Negotiation (PS3.7 D.3.3.7). All
-DICOM operations execute under a single XNAT service account
-configured at the application level.
+DICOM operations execute as a single XNAT user (currently the
+primary administrator account; see section 8.3).
 
 The Calling AE Title is not validated and is not used for
 access control.
@@ -641,12 +735,13 @@ TLS is not supported. All communication is over plain TCP.
 
 ### 7.4 Audit
 
-DICOM operations are logged via SLF4J. C-FIND and C-GET
-requests are logged at DEBUG level with the Calling AE Title,
-Called AE Title, and query level. SCP lifecycle events (start,
-stop) and preference changes are logged at INFO level.
-Association-level details are available at DEBUG level via
-dcm4che's logging.
+DICOM operations are recorded in the XNAT application logs.
+C-FIND and C-GET requests are logged at DEBUG level with the
+Calling AE Title, Called AE Title, and query level. SCP
+lifecycle events (start, stop) and preference changes are
+logged at INFO level. Lower-level association details are
+available at DEBUG level from the underlying dcm4che networking
+layer.
 
 There is no DICOM Audit Trail (PS3.15 A.5).
 
@@ -679,11 +774,17 @@ request time.
 
 ### 8.3 Service Account
 
-The XNAT user under which DICOM operations execute is
-determined by the XNAT `XnatUserProvider` bean. This is
-typically the XNAT administrator or a dedicated service
-account. Configuration is at the XNAT application level, not
-within the DIMSE plugin.
+Because the SCP does not authenticate the connecting DICOM
+client (see section 7.1), all data access is performed as a
+fixed XNAT user. Currently that user is always the XNAT site's
+primary administrator account. There is no plugin setting to
+select a different or dedicated service account.
+
+As a result, queries and retrievals operate with full
+administrative data access. The effective scope of what a
+client can see or retrieve is therefore limited only by the
+project access controls in section 8.4, not by any per-user
+DICOM permissions (see also section 7.2).
 
 ### 8.4 Access Control Settings
 
@@ -757,11 +858,12 @@ or clear the project override.
    set encoding is not handled. Non-ASCII characters in XNAT
    fields may not render correctly in DICOM clients.
 
-6. **PATIENT level counts are expensive.** At the PATIENT
-   query level, Number of Patient Related Studies, Series,
-   and Instances are computed by loading all sessions and
-   scans for each subject. This may be slow for projects with
-   many subjects or large datasets.
+6. **PATIENT level counts may be slower.** At the PATIENT query
+   level, Number of Patient Related Studies, Series, and
+   Instances are aggregated across all of a subject's sessions
+   and scans. For projects with very large numbers of subjects,
+   sessions, or files, PATIENT-level queries may be noticeably
+   slower than STUDY- or SERIES-level queries.
 
 7. **No partial retrieval by query level.** The C-GET SCP
    does not enforce query level semantics beyond using the
@@ -770,8 +872,9 @@ or clear the project override.
    filter by both, regardless of level.
 
 8. **File count may not match XNAT UI.** Instance counts
-   exclude resources not labeled `DICOM` or `secondary` and
-   always exclude `SNAPSHOTS` resources.
+   include only resources whose label, format, or content
+   contains `DICOM` or `secondary` (see 5.10), and include
+   every file in those resources.
 
 9. **Shared sessions.** Sessions shared into a project from
    another project are included in C-FIND results and are

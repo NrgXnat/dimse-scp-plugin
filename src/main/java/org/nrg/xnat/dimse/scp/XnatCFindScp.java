@@ -12,7 +12,9 @@ import org.dcm4che3.net.service.DicomServiceException;
 import org.dcm4che3.net.service.QueryTask;
 import org.nrg.xdat.om.XnatProjectdata;
 import org.nrg.xft.security.UserI;
+import org.nrg.xnat.dimse.query.DateTimeKeys;
 import org.nrg.xnat.dimse.query.DicomQueryService;
+import org.nrg.xnat.dimse.query.QueryKeys;
 import org.nrg.xnat.dimse.query.QueryLevel;
 
 import java.util.Iterator;
@@ -59,6 +61,11 @@ public class XnatCFindScp extends BasicCFindSCP {
         log.debug("C-FIND from {} to {}, keys {}", callingAet, calledAet, keys);
         final QueryLevel level = QueryLevel.fromKeys(keys);
         log.trace("query level {}", level);
+        // Keys not supported at this level are ignored: not validated,
+        // matched or returned.
+        final Attributes supported = QueryKeys.select(pc.getAbstractSyntax(), level, keys);
+        level.requireSingleUidKeysAbove(supported);
+        DateTimeKeys.requireValid(supported);
 
         final XnatProjectdata project = _projectAeResolver.resolve(calledAet)
             .orElseThrow(() -> {
@@ -71,33 +78,24 @@ public class XnatCFindScp extends BasicCFindSCP {
 
         log.debug("C-FIND searching project '{}' at level {}", project.getId(), level);
 
-        final Stream<Attributes> matches;
-        switch (level) {
-            case PATIENT:
-                matches = _queryService.findPatients(project, keys, user);
-                break;
-            case STUDY:
-                matches = _queryService.findStudies(project, keys, user);
-                break;
-            case SERIES:
-                matches = _queryService.findSeries(project, keys, user);
-                break;
-            case IMAGE:
-                matches = _queryService.findInstances(project, keys, user);
-                break;
-            default:
-                throw new DicomServiceException(Status.IdentifierDoesNotMatchSOPClass,
-                        "Unsupported query level " + level);
-        }
-
-        final Iterator<Attributes> iter = matches.iterator();
         final String projectId = project.getId();
-        return new BasicQueryTask(as, pc, rq, keys) {
+        final Iterator<Attributes> iter;
+        try {
+            iter = find(level, project, supported, user).iterator();
+        } catch (final RuntimeException e) {
+            throw queryFailed(projectId, level, e);
+        }
+        return new BasicQueryTask(as, pc, rq, supported) {
             private int _count;
 
             @Override
-            protected boolean hasMoreMatches() {
-                final boolean more = iter.hasNext();
+            protected boolean hasMoreMatches() throws DicomServiceException {
+                final boolean more;
+                try {
+                    more = iter.hasNext();
+                } catch (final RuntimeException e) {
+                    throw queryFailed(projectId, level, e);
+                }
                 if (!more) {
                     log.debug("C-FIND completed: {} matches for project '{}' at level {}", _count, projectId, level);
                 }
@@ -105,10 +103,52 @@ public class XnatCFindScp extends BasicCFindSCP {
             }
 
             @Override
-            protected Attributes nextMatch() {
+            protected Attributes nextMatch() throws DicomServiceException {
                 _count++;
-                return iter.next();
+                try {
+                    return iter.next();
+                } catch (final RuntimeException e) {
+                    throw queryFailed(projectId, level, e);
+                }
             }
         };
+    }
+
+    private Stream<Attributes> find(final QueryLevel level,
+                                    final XnatProjectdata project,
+                                    final Attributes keys,
+                                    final UserI user) throws DicomServiceException {
+        switch (level) {
+            case PATIENT:
+                return _queryService.findPatients(project, keys, user);
+            case STUDY:
+                return _queryService.findStudies(project, keys, user);
+            case SERIES:
+                return _queryService.findSeries(project, keys, user);
+            case IMAGE:
+                return _queryService.findInstances(project, keys, user);
+            default:
+                throw new DicomServiceException(Status.IdentifierDoesNotMatchSOPClass,
+                        "Unsupported query level " + level);
+        }
+    }
+
+    /**
+     * Reports an unexpected failure (a bug, since query failures are
+     * thrown as {@link DicomServiceException} by the query service) as
+     * C000H Unable to Process. dcm4che sends a
+     * {@link DicomServiceException} thrown while matches are being
+     * iterated as the final C-FIND response, but sends no final
+     * response for any other exception. The cause is logged, not put in
+     * the Error Comment, which the SCU can read.
+     */
+    private static DicomServiceException queryFailed(final String projectId,
+                                                     final QueryLevel level,
+                                                     final RuntimeException cause) {
+        log.error("C-FIND failed unexpectedly for project '{}' at level {}", projectId, level, cause);
+        final DicomServiceException e =
+                new DicomServiceException(Status.UnableToProcess, "Query failed");
+        e.initCause(cause);
+        return e;
     }
 }

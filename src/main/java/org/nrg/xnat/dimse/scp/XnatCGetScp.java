@@ -133,22 +133,25 @@ public class XnatCGetScp extends BasicCGetSCP {
 
         final List<InstanceLocator> instanceLocators = new ArrayList<>();
         for (final XnatImagesessiondata session : sessions) {
+            // Files belong to the owning project, which differs from the
+            // Called-AE project for a session shared into it.
+            final String owningProjectId = session.getProject();
             for (final XnatImagescandataI scan : session.getScans_scan()) {
                 if (!matchesSeriesKeys.test(scan)) {
                     continue;
                 }
                 CatalogEntryUtils.dicomCatalogs(scan).forEach(resourceCatalog -> {
                     try {
-                        CatalogUtils.CatalogData.get(resourceCatalog, projectId)
+                        CatalogUtils.CatalogData.get(resourceCatalog, owningProjectId)
                                 .ifPresent(catalogData -> catalogData.catBean.getEntries_entry().stream()
                                         .filter(CatDcmentryBean.class::isInstance)
                                         .map(CatDcmentryBean.class::cast)
                                         .filter(matchesInstanceKeys)
-                                        .map(e -> FileInstanceLocator.forEntry(projectId, catalogData.catPath, e))
+                                        .map(e -> FileInstanceLocator.forEntry(owningProjectId, catalogData.catPath, e))
                                         .filter(Objects::nonNull)
                                         .forEach(instanceLocators::add));
                     } catch (ServerException e) {
-                        log.error("unable to get catalog data for {}:{}", projectId, resourceCatalog, e);
+                        log.error("unable to get catalog data for {}:{}", owningProjectId, resourceCatalog, e);
                     }
                 });
             }
@@ -165,7 +168,7 @@ public class XnatCGetScp extends BasicCGetSCP {
      * @param projectId the XNAT project
      * @param keys      the C-GET Identifier
      * @param user      the service account for data access
-     * @return matching sessions within the project
+     * @return matching sessions owned by or shared into the project
      * @throws DicomServiceException if no usable keys are present
      */
     private List<XnatImagesessiondata> findSessions(final String projectId,
@@ -174,13 +177,11 @@ public class XnatCGetScp extends BasicCGetSCP {
             throws DicomServiceException {
         final Set<String> studyUids = getStringsAsSet(keys, Tag.StudyInstanceUID);
         if (!studyUids.isEmpty()) {
-            return studyUids.stream()
+            return sessionsInProject(projectId, studyUids.stream()
                     .flatMap(uid -> XnatImagesessiondata
                             .getXnatImagesessiondatasByField(
                                     "xnat:imageSessionData/UID", uid, user, false)
-                            .stream())
-                    .filter(s -> projectId.equals(s.getProject()))
-                    .collect(Collectors.toList());
+                            .stream()));
         }
 
         final String patientId = keys.getString(Tag.PatientID);
@@ -193,12 +194,15 @@ public class XnatCGetScp extends BasicCGetSCP {
     }
 
     /**
-     * Finds all imaging sessions for a subject within a project.
+     * Finds the imaging sessions for a subject that are visible in a
+     * project. A subject shared into the project may have sessions in
+     * other projects that were not shared; those are excluded.
      *
      * @param projectId    the XNAT project ID
      * @param subjectLabel the subject label (mapped from DICOM Patient ID)
      * @param user         the service account for data access
-     * @return imaging sessions for the subject, or empty list if subject not found
+     * @return imaging sessions for the subject owned by or shared into
+     *         the project, or empty list if subject not found
      */
     private static List<XnatImagesessiondata> sessionsBySubject(final String projectId,
                                                                 final String subjectLabel,
@@ -209,9 +213,24 @@ public class XnatCGetScp extends BasicCGetSCP {
             log.debug("No subject '{}' in project '{}'", subjectLabel, projectId);
             return Collections.emptyList();
         }
-        return subject.getExperiments_experiment().stream()
+        return sessionsInProject(projectId, subject.getExperiments_experiment().stream());
+    }
+
+    /**
+     * Selects the imaging sessions that are owned by or shared into a
+     * project. The DIMSE service account can read every project, so
+     * this is the only project boundary on the C-GET path.
+     *
+     * @param projectId   the XNAT project scoped by the Called AE Title
+     * @param experiments candidate experiments of any type
+     * @return the imaging sessions in project scope
+     */
+    static List<XnatImagesessiondata> sessionsInProject(final String projectId,
+                                                        final Stream<?> experiments) {
+        return experiments
                 .filter(XnatImagesessiondata.class::isInstance)
                 .map(XnatImagesessiondata.class::cast)
+                .filter(session -> session.hasProject(projectId))
                 .collect(Collectors.toList());
     }
 
